@@ -1,0 +1,285 @@
+# backend/models.py
+from __future__ import annotations
+import re
+from datetime import datetime, date as dt_date
+from sqlalchemy import UniqueConstraint, Index, event, ForeignKey
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+from extensions import db
+
+
+# ----- helpers -----
+def utcnow() -> datetime:
+    return datetime.utcnow()
+
+
+# ----- mixins -----
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        default=utcnow, onupdate=utcnow, nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class PKMixin:
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+
+# ----- users -----
+class User(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "users"
+    name: Mapped[str] = mapped_column(db.String(120), nullable=False)
+    email: Mapped[str] = mapped_column(
+        db.String(255), unique=True, index=True, nullable=False
+    )
+    password_hash: Mapped[str] = mapped_column(db.String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(db.Boolean, default=True, nullable=False)
+
+
+# ----- clients -----
+class Client(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "clients"
+    name: Mapped[str] = mapped_column(db.String(200), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(db.String(120))
+    email: Mapped[str | None] = mapped_column(db.String(255))
+    phone: Mapped[str | None] = mapped_column(db.String(50))
+    address: Mapped[str | None] = mapped_column(db.Text)
+    notes: Mapped[str | None] = mapped_column(db.Text)
+
+    projects = relationship(
+        "Project", back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+# ----- categories (global master) -----
+class Category(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "categories"
+    name: Mapped[str] = mapped_column(db.String(120), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(db.Text)
+
+    components = relationship(
+        "Component", back_populates="category", cascade="all, delete-orphan"
+    )
+
+
+# ----- components (global master) -----
+class Component(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "components"
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(db.String(200), nullable=False)
+    default_unit_price_usd: Mapped[float | None] = mapped_column(db.Float)
+    uom: Mapped[str | None] = mapped_column(db.String(40))  # piece, meter, hour, etc.
+
+    category = relationship("Category", back_populates="components")
+
+    __table_args__ = (
+        UniqueConstraint("category_id", "name", name="uq_components_category_name"),
+    )
+
+
+# ----- projects -----
+class Project(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "projects"
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("clients.id"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(
+        db.String(20), unique=True, index=True
+    )  # PP-####-YYYYMM
+    name: Mapped[str] = mapped_column(db.String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(db.Text)
+    project_type: Mapped[str | None] = mapped_column(db.String(120))
+    status: Mapped[str] = mapped_column(
+        db.String(20), default="planned"
+    )  # planned/active/on_hold/completed
+    start_date: Mapped[dt_date | None]
+    end_date: Mapped[dt_date | None]
+    budget_amount_usd: Mapped[float | None] = mapped_column(db.Float)
+    tax_rate: Mapped[float | None] = mapped_column(db.Float)  # 0.0 - 0.25 etc.
+    currency: Mapped[str] = mapped_column(db.String(3), default="USD", nullable=False)
+
+    client = relationship("Client", back_populates="projects")
+    categories = relationship(
+        "ProjectCategory", back_populates="project", cascade="all, delete-orphan"
+    )
+    components = relationship(
+        "ProjectComponent", back_populates="project", cascade="all, delete-orphan"
+    )
+    tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    expenses = relationship(
+        "Expense", back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+@event.listens_for(Project, "before_insert")
+def assign_project_code(mapper, connection, target: Project):
+    if target.code:
+        return
+    yyyymm = (target.start_date or datetime.utcnow().date()).strftime("%Y%m")
+    pattern = f"PP-%-{yyyymm}"
+    result = db.session.query(Project.code).filter(Project.code.like(pattern)).all()
+    seqs: list[int] = []
+    for (code,) in result:
+        m = re.match(rf"PP-(\d{{4}})-{yyyymm}$", code or "")
+        if m:
+            seqs.append(int(m.group(1)))
+    next_seq = (max(seqs) + 1) if seqs else 1
+    target.code = f"PP-{next_seq:04d}-{yyyymm}"
+
+
+# ----- project -> categories (with base cost) -----
+class ProjectCategory(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "project_categories"
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id"), nullable=False, index=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"), nullable=False, index=True
+    )
+    base_cost_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
+
+    project = relationship("Project", back_populates="categories")
+    category = relationship("Category")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "category_id", name="uq_project_categories_proj_cat"
+        ),
+        Index("ix_pc_proj_cat", "project_id", "category_id"),
+    )
+
+
+# ----- project -> components (BOM) -----
+class ProjectComponent(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "project_components"
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id"), nullable=False, index=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"), nullable=False, index=True
+    )
+    component_id: Mapped[int] = mapped_column(
+        ForeignKey("components.id"), nullable=False, index=True
+    )
+    quantity: Mapped[float] = mapped_column(db.Float, default=1.0, nullable=False)
+    unit_price_usd: Mapped[float | None] = mapped_column(
+        db.Float
+    )  # overrides component default
+    note: Mapped[str | None] = mapped_column(db.Text)
+
+    project = relationship("Project", back_populates="components")
+    category = relationship("Category")
+    component = relationship("Component")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "component_id", name="uq_project_component_unique"
+        ),
+        Index("ix_proj_comp_proj_cat", "project_id", "category_id"),
+    )
+
+
+# ----- tasks / comments -----
+class Task(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "tasks"
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(db.String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(db.Text)
+    status: Mapped[str] = mapped_column(
+        db.String(20), default="todo"
+    )  # todo/in_progress/done
+    assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    due_date: Mapped[dt_date | None]
+    order_index: Mapped[int] = mapped_column(default=0)
+
+    project = relationship("Project", back_populates="tasks")
+    comments = relationship(
+        "TaskComment", back_populates="task", cascade="all, delete-orphan"
+    )
+
+
+class TaskComment(db.Model, PKMixin):
+    __tablename__ = "task_comments"
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("tasks.id"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    body: Mapped[str] = mapped_column(db.Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+
+    task = relationship("Task", back_populates="comments")
+
+
+# ----- expenses (header) -----
+class Expense(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "expenses"
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id"), nullable=False, index=True
+    )
+    expense_date: Mapped[dt_date] = mapped_column(
+        default=lambda: datetime.utcnow().date(), nullable=False
+    )
+    vendor: Mapped[str | None] = mapped_column(db.String(200))
+    reference_no: Mapped[str | None] = mapped_column(db.String(100))
+    note: Mapped[str | None] = mapped_column(db.Text)
+
+    subtotal_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
+    tax_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
+    total_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
+
+    project = relationship("Project", back_populates="expenses")
+    lines = relationship(
+        "ExpenseLine", back_populates="expense", cascade="all, delete-orphan"
+    )
+
+
+# ----- expense lines (detail, tax-exclusive) -----
+class ExpenseLine(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "expense_lines"
+    expense_id: Mapped[int] = mapped_column(
+        ForeignKey("expenses.id"), nullable=False, index=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id"), nullable=False, index=True
+    )
+    component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("components.id"), index=True
+    )
+    project_component_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_components.id"), index=True
+    )
+
+    quantity: Mapped[float | None] = mapped_column(db.Float)
+    unit_price_usd: Mapped[float | None] = mapped_column(db.Float)
+    line_total_usd: Mapped[float] = mapped_column(
+        db.Float, default=0.0, nullable=False
+    )  # exact invoice number (excl. tax)
+
+    expense = relationship("Expense", back_populates="lines")
+    category = relationship("Category")
+    component = relationship("Component")
+    project_component = relationship("ProjectComponent")
+
+    __table_args__ = (
+        Index("ix_exp_line_expense_category", "expense_id", "category_id"),
+    )
+
+
+# ----- attachments (polymorphic) -----
+class Attachment(db.Model, PKMixin, TimestampMixin):
+    __tablename__ = "attachments"
+    owner_type: Mapped[str] = mapped_column(
+        db.String(20), nullable=False
+    )  # 'project' | 'task' | 'expense'
+    owner_id: Mapped[int] = mapped_column(db.Integer, nullable=False, index=True)
+    file_path: Mapped[str] = mapped_column(db.String(400), nullable=False)
+    original_name: Mapped[str] = mapped_column(db.String(255), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(db.String(120))
+    size_bytes: Mapped[int | None] = mapped_column(db.Integer)
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
