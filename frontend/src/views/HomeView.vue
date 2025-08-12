@@ -14,8 +14,12 @@ const doLogout = async () => {
   <div class="p-6 space-y-4">
     <h1 class="text-2xl font-semibold">ProjectPeak</h1>
     <p v-if="auth.user">Welcome, <span class="font-medium">{{ auth.user.name }}</span>!</p>
-    <div class="flex gap-3">
-      <RouterLink to="/projects" class="underline">Go to projects</RouterLink>
+    <div class="flex gap-4 p-4 border-b">
+      <RouterLink to="/projects" class="underline">Projects</RouterLink>
+      <RouterLink to="/catalog" class="underline">Catalog</RouterLink>
+      <RouterLink to="/clients">Clients</RouterLink>
+      <RouterLink to="/categories">Categories</RouterLink>
+      <RouterLink to="/components">Components</RouterLink>
       <button class="rounded bg-black text-white px-3 py-1" @click="doLogout">Logout</button>
     </div>
   </div>

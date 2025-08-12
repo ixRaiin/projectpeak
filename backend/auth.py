@@ -5,8 +5,8 @@ from typing import Optional, Tuple
 import jwt
 from flask import Blueprint, current_app, jsonify, request, make_response
 from werkzeug.security import generate_password_hash, check_password_hash
-from extensions import db
-from models import User
+from .extensions import db
+from .models import User
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 

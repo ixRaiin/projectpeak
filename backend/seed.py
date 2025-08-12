@@ -1,34 +1,17 @@
-from extensions import db
-from app import create_app
-from models import Category, Component
+from backend.app import app
+from backend.extensions import db
+from backend.models import User
+from werkzeug.security import generate_password_hash as g
 
-
-def run():
-    app = create_app()
-    with app.app_context():
-        # sample categories
-        for name in ["Installation", "Materials", "Labor", "Equipment", "Misc"]:
-            db.session.merge(Category(name=name))
+with app.app_context():
+    db.create_all()
+    if not User.query.filter_by(email="admin@example.com").first():
+        db.session.add(
+            User(name="Admin",
+                 email="admin@example.com",
+                 password_hash=g("examplepass"))
+        )
         db.session.commit()
-
-        # sample components
-        inst = Category.query.filter_by(name="Installation").first()
-        mats = Category.query.filter_by(name="Materials").first()
-
-        samples = [
-            (inst, "Cooler Unit", 350.0, "piece"),
-            (mats, 'Pipe 2"', 4.5, "meter"),
-            (mats, "Heater", 120.0, "piece"),
-        ]
-        for cat, name, price, uom in samples:
-            db.session.merge(
-                Component(
-                    category_id=cat.id, name=name, default_unit_price_usd=price, uom=uom
-                )
-            )
-        db.session.commit()
-        print("Seeded.")
-
-
-if __name__ == "__main__":
-    run()
+        print("seeded")
+    else:
+        print("user already exists")

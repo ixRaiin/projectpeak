@@ -1,17 +1,14 @@
-# backend/models.py
 from __future__ import annotations
 import re
 from datetime import datetime, date as dt_date
 from sqlalchemy import UniqueConstraint, Index, event, ForeignKey
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from extensions import db
+from .extensions import db
 
 
 # ----- helpers -----
 def utcnow() -> datetime:
     return datetime.utcnow()
-
-
 # ----- mixins -----
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
@@ -108,8 +105,10 @@ class Project(db.Model, PKMixin, TimestampMixin):
         "ProjectComponent", back_populates="project", cascade="all, delete-orphan"
     )
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
-    expenses = relationship(
-        "Expense", back_populates="project", cascade="all, delete-orphan"
+    expenses: Mapped[list["Expense"]] = relationship(
+        "Expense",
+        back_populates="project",
+        cascade="all, delete-orphan",
     )
 
 
@@ -222,21 +221,19 @@ class Expense(db.Model, PKMixin, TimestampMixin):
     project_id: Mapped[int] = mapped_column(
         ForeignKey("projects.id"), nullable=False, index=True
     )
-    expense_date: Mapped[dt_date] = mapped_column(
-        default=lambda: datetime.utcnow().date(), nullable=False
+    expense_date: Mapped[dt_date] = mapped_column(db.Date, nullable=False)
+    vendor: Mapped[str | None] = mapped_column(db.String(120))
+    memo: Mapped[str | None] = mapped_column(db.Text)
+    project: Mapped["Project"] = relationship(
+        "Project",
+        back_populates="expenses",
     )
-    vendor: Mapped[str | None] = mapped_column(db.String(200))
-    reference_no: Mapped[str | None] = mapped_column(db.String(100))
-    note: Mapped[str | None] = mapped_column(db.Text)
-
-    subtotal_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
-    tax_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
-    total_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
-
-    project = relationship("Project", back_populates="expenses")
-    lines = relationship(
-        "ExpenseLine", back_populates="expense", cascade="all, delete-orphan"
+    lines: Mapped[list["ExpenseLine"]] = relationship(
+        "ExpenseLine",
+        back_populates="expense",
+        cascade="all, delete-orphan",
     )
+
 
 
 # ----- expense lines (detail, tax-exclusive) -----
@@ -248,27 +245,14 @@ class ExpenseLine(db.Model, PKMixin, TimestampMixin):
     category_id: Mapped[int] = mapped_column(
         ForeignKey("categories.id"), nullable=False, index=True
     )
-    component_id: Mapped[int | None] = mapped_column(
-        ForeignKey("components.id"), index=True
+    qty: Mapped[float] = mapped_column(db.Numeric(12, 2), default=1)
+    unit_price_usd: Mapped[float] = mapped_column(db.Numeric(12, 2), default=0)
+    line_total_usd: Mapped[float] = mapped_column(db.Numeric(12, 2))
+    expense: Mapped["Expense"] = relationship(
+        "Expense",
+        back_populates="lines",
     )
-    project_component_id: Mapped[int | None] = mapped_column(
-        ForeignKey("project_components.id"), index=True
-    )
-
-    quantity: Mapped[float | None] = mapped_column(db.Float)
-    unit_price_usd: Mapped[float | None] = mapped_column(db.Float)
-    line_total_usd: Mapped[float] = mapped_column(
-        db.Float, default=0.0, nullable=False
-    )  # exact invoice number (excl. tax)
-
-    expense = relationship("Expense", back_populates="lines")
-    category = relationship("Category")
-    component = relationship("Component")
-    project_component = relationship("ProjectComponent")
-
-    __table_args__ = (
-        Index("ix_exp_line_expense_category", "expense_id", "category_id"),
-    )
+    category: Mapped["Category"] = relationship("Category")
 
 
 # ----- attachments (polymorphic) -----
