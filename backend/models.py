@@ -218,16 +218,12 @@ class TaskComment(db.Model, PKMixin):
 # ----- expenses (header) -----
 class Expense(db.Model, PKMixin, TimestampMixin):
     __tablename__ = "expenses"
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id"), nullable=False, index=True
-    )
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    reference_no: Mapped[str | None] = mapped_column(db.String(50))
     expense_date: Mapped[dt_date] = mapped_column(db.Date, nullable=False)
     vendor: Mapped[str | None] = mapped_column(db.String(120))
     memo: Mapped[str | None] = mapped_column(db.Text)
-    project: Mapped["Project"] = relationship(
-        "Project",
-        back_populates="expenses",
-    )
+    project: Mapped["Project"] = relationship("Project", back_populates="expenses")
     lines: Mapped[list["ExpenseLine"]] = relationship(
         "ExpenseLine",
         back_populates="expense",
@@ -239,19 +235,12 @@ class Expense(db.Model, PKMixin, TimestampMixin):
 # ----- expense lines (detail, tax-exclusive) -----
 class ExpenseLine(db.Model, PKMixin, TimestampMixin):
     __tablename__ = "expense_lines"
-    expense_id: Mapped[int] = mapped_column(
-        ForeignKey("expenses.id"), nullable=False, index=True
-    )
-    category_id: Mapped[int] = mapped_column(
-        ForeignKey("categories.id"), nullable=False, index=True
-    )
+    expense_id: Mapped[int] = mapped_column(ForeignKey("expenses.id"), nullable=False, index=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), nullable=False, index=True)
     qty: Mapped[float] = mapped_column(db.Numeric(12, 2), default=1)
     unit_price_usd: Mapped[float] = mapped_column(db.Numeric(12, 2), default=0)
     line_total_usd: Mapped[float] = mapped_column(db.Numeric(12, 2))
-    expense: Mapped["Expense"] = relationship(
-        "Expense",
-        back_populates="lines",
-    )
+    expense: Mapped["Expense"] = relationship("Expense", back_populates="lines")
     category: Mapped["Category"] = relationship("Category")
 
 
