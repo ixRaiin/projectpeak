@@ -81,5 +81,20 @@ export const useProjects = defineStore('projects', {
         this.detail.summary = await api(`/projects/${pid}/summary`)
       } finally { this.detail.loadingSummary = false }
     },
+    async fetchOne(id) {
+      this.loading = true; this.error = null
+      try {
+        const res = await api().get(`/projects/${id}`)
+        const idx = this.items.findIndex(p => p.id === res.id)
+        if (idx >= 0) this.items[idx] = res
+        else this.items.push(res)
+        return res
+      } catch (e) {
+        this.error = e?.error || 'Failed to load project'
+        throw e
+      } finally {
+        this.loading = false
+      }
+    }
   }
 })
