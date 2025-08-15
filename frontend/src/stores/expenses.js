@@ -14,17 +14,20 @@ export const useExpenses = defineStore('expenses', {
         const res = await api().get(`/projects/${pid}/expenses`)
         this.items = res.expenses || []
       } catch (e) {
-        this.error = e?.error || 'failed to load expenses'
+        this.error = e?.error || 'Failed to load expenses'
       } finally {
         this.loading = false
       }
     },
     async create(pid, payload) {
       this.error = null
-      const res = await api().post(`/projects/${pid}/expenses`, payload)
-      // push newest at top
-      this.items.unshift(res.expense)
-      return res.expense
+      try {
+        await api().post(`/projects/${pid}/expenses`, payload)
+        await this.fetchForProject(pid)
+      } catch (e) {
+        this.error = e?.error || 'Failed to create expense'
+        throw e
+      }
     },
   },
 })

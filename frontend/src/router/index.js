@@ -9,13 +9,14 @@ const ClientsView = () => import('@/views/ClientsView.vue')
 const CatalogView = () => import('@/views/CatalogView.vue')
 const ComponentsView = () => import('@/views/ComponentsView.vue')
 const CategoriesView = () => import('@/views/CategoriesView.vue')
+const ProjectsDetailView = () => import('@/views/ProjectDetailView.vue')
 
 const routes = [
   { path: '/login', component: LoginView, meta: { guestOnly: true } },
   { path: '/register', component: RegisterView, meta: { guestOnly: true } },
   { path: '/clients', component: ClientsView, meta: { requiresAuth: true } },
   { path: '/projects', component: ProjectsView, meta: { requiresAuth: true } },
-  { path: '/projects/:id', component: () => import('@/views/ProjectDetailView.vue'), meta: { requiresAuth: true } },
+  { path: '/projects/:id', component: ProjectsDetailView, meta: { requiresAuth: true } },
   { path: '/catalog', component: CatalogView, meta: { requiresAuth: true } },
   { path: '/categories', component: ComponentsView, meta: { requiresAuth: true } },
   { path: '/components', component: CategoriesView, meta: { requiresAuth: true } },
