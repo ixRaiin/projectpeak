@@ -1,11 +1,23 @@
 const BASE = '/api';
 
 async function parse(res) {
-  if (res.status === 204) return null;
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.error || res.statusText || `HTTP ${res.status}`);
-  return data;
+  if (res.status === 204) return { ok: true }
+
+  const ct = res.headers.get('content-type') || ''
+  const text = await res.text()
+
+  let data = null
+  if (ct.includes('application/json') && text) {
+    try { data = JSON.parse(text) } catch { /* Error */ }
+  }
+  if (!res.ok) {
+    const msg =
+      (data && (data.error || data.message)) ||
+      (text && !text.startsWith('<') && text) ||
+      res.statusText
+    throw new Error(msg || 'Request failed')
+  }
+  return data ?? (text ? { data: text } : {})
 }
 
 function toURL(path, params) {
