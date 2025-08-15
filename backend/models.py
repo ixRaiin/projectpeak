@@ -231,7 +231,6 @@ class Expense(db.Model, PKMixin, TimestampMixin):
     )
 
 
-
 # ----- expense lines (detail, tax-exclusive) -----
 class ExpenseLine(db.Model, PKMixin, TimestampMixin):
     __tablename__ = "expense_lines"

@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request, g, current_app
 from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from .extensions import db
-from .models import Project, Client,Category,Component,ProjectCategory
+from .models import Project, Client,Category,Component,ProjectCategory, ProjectComponent
 from .auth import _get_token_from_request, _verify_token
 
 bp = Blueprint("projects", __name__, url_prefix="/api/projects")
