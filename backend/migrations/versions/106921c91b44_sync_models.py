@@ -13,10 +13,8 @@ def upgrade():
     with op.batch_alter_table('tasks', schema=None) as batch_op:
         # add parent_task_id
         batch_op.add_column(sa.Column('parent_task_id', sa.Integer(), nullable=True))
-
         # index on assignee_user_id (as autogenerate suggested)
         batch_op.create_index('ix_tasks_assignee_user_id', ['assignee_user_id'], unique=False)
-
         # self-referencing FK (name it explicitly; SQLite needs a name for Alembic to manage later)
         batch_op.create_foreign_key(
             'fk_tasks_parent_task_id_tasks',
@@ -25,7 +23,6 @@ def upgrade():
             ['id'],
             ondelete='SET NULL'
         )
-
     # IMPORTANT: Do NOT drop any existing constraint on project_id in SQLite.
     # If autogenerate added a drop_constraint for project_id, remove it.
 
