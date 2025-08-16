@@ -234,6 +234,13 @@ onMounted(async () => {
               </div>
             </div>
             <div class="flex-shrink-0 flex gap-3">
+              <RouterLink
+                class="text-sm underline cursor-pointer focus:outline-none focus:ring-2 focus:ring-black/30 rounded"
+                :to="{ name: 'project-detail', params: { id: p.id } }"
+                title="Open details"
+              >
+                View
+              </RouterLink>
               <button
                 class="text-sm underline cursor-pointer focus:outline-none focus:ring-2 focus:ring-black/30 rounded"
                 @click="openManage(p)"

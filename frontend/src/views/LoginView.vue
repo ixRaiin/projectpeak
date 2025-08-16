@@ -1,29 +1,58 @@
 <script setup>
-import { ref } from 'vue';
-import { useAuth } from '@/stores/auth';
-import { useRouter } from 'vue-router';
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuth } from '@/stores/auth'
 
-const email = ref('');
-const password = ref('');
-const auth = useAuth();
-const router = useRouter();
+const router = useRouter()
+const auth = useAuth()
 
-const submit = async () => {
-  try { await auth.login({ email: email.value, password: password.value }); router.push('/'); }
-  catch (err) {
-    auth.error = err?.message || 'Login failed';
+const email = ref('admin@example.com')
+const password = ref('')
+const submitting = ref(false)
+
+async function submit() {
+  submitting.value = true
+  try {
+    await auth.login(email.value, password.value)
+    router.push('/') // go home (or wherever)
+  } catch (e) {
+    // auth.error already set in store
+  } finally {
+    submitting.value = false
   }
-};
+}
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center p-6">
-    <form @submit.prevent="submit" class="w-full max-w-sm space-y-4">
-      <h1 class="text-2xl font-semibold">Login</h1>
-      <input v-model="email" type="email" placeholder="Email" class="w-full border rounded p-2" required />
-      <input v-model="password" type="password" placeholder="Password" class="w-full border rounded p-2" required />
-      <button class="w-full rounded bg-black text-white py-2">Sign in</button>
-      <p v-if="auth.error" class="text-red-600 text-sm">{{ auth.error }}</p>
+  <div class="max-w-sm mx-auto p-6 space-y-4">
+    <h1 class="text-2xl font-semibold">Login</h1>
+
+    <form @submit.prevent="submit" class="space-y-3">
+      <input
+        v-model="email"
+        type="email"
+        placeholder="Email"
+        class="w-full border rounded p-2 bg-yellow-100"
+        required
+      />
+      <input
+        v-model="password"
+        type="password"
+        placeholder="Password"
+        class="w-full border rounded p-2 bg-yellow-100"
+        required
+      />
+
+      <button
+        :disabled="submitting"
+        class="w-full rounded bg-black text-white py-2 disabled:opacity-50"
+      >
+        {{ submitting ? 'Signing in…' : 'Sign in' }}
+      </button>
+
+      <p v-if="auth.error" class="text-red-600 text-sm mt-2">
+        {{ auth.error }}
+      </p>
     </form>
   </div>
 </template>

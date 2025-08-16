@@ -1,26 +1,34 @@
 <script setup>
-import { useAuth } from '@/stores/auth'
 import { useRouter } from 'vue-router'
-const auth = useAuth()
-const router = useRouter()
+import { useAuth } from '@/stores/auth'
 
-const doLogout = async () => {
+const router = useRouter()
+const auth = useAuth()
+
+async function doLogout() {
   await auth.logout()
-  router.push('/login')
+  // Send user to a public page; the guard will not try to load protected views
+  router.replace({ path: '/login' })
 }
 </script>
 
 <template>
   <div class="p-6 space-y-4">
-    <h1 class="text-2xl font-semibold">ProjectPeak</h1>
-    <p v-if="auth.user">Welcome, <span class="font-medium">{{ auth.user.name }}</span>!</p>
-    <div class="flex gap-4 p-4 border-b">
-      <RouterLink to="/projects" class="underline">Projects</RouterLink>
-      <RouterLink to="/catalog" class="underline">Catalog</RouterLink>
-      <RouterLink to="/clients">Clients</RouterLink>
-      <RouterLink to="/categories">Categories</RouterLink>
-      <RouterLink to="/components">Components</RouterLink>
-      <button class="rounded bg-black text-white px-3 py-1" @click="doLogout">Logout</button>
+    <h1 class="text-2xl font-semibold">Welcome</h1>
+    <p class="text-gray-600">You are logged in as: <strong>{{ auth.user?.name || auth.user?.email }}</strong></p>
+
+    <div class="flex gap-3">
+      <router-link to="/projects" class="underline">Projects</router-link>
+      <router-link to="/catalog" class="underline">Catalog</router-link>
+      <router-link to="/clients" class="underline">Clients</router-link>
     </div>
+
+    <button
+      type="button"
+      class="mt-4 rounded bg-black text-white px-3 py-2"
+      @click="doLogout"
+    >
+      Logout
+    </button>
   </div>
 </template>
