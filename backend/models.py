@@ -138,10 +138,8 @@ class ProjectCategory(db.Model, PKMixin, TimestampMixin):
         ForeignKey("categories.id"), nullable=False, index=True
     )
     base_cost_usd: Mapped[float] = mapped_column(db.Float, default=0.0, nullable=False)
-
     project = relationship("Project", back_populates="categories")
     category = relationship("Category")
-
     __table_args__ = (
         UniqueConstraint(
             "project_id", "category_id", name="uq_project_categories_proj_cat"
@@ -167,11 +165,9 @@ class ProjectComponent(db.Model, PKMixin, TimestampMixin):
         db.Float
     )  # overrides component default
     note: Mapped[str | None] = mapped_column(db.Text)
-
     project = relationship("Project", back_populates="components")
     category = relationship("Category")
     component = relationship("Component")
-
     __table_args__ = (
         UniqueConstraint(
             "project_id", "component_id", name="uq_project_component_unique"
@@ -183,36 +179,55 @@ class ProjectComponent(db.Model, PKMixin, TimestampMixin):
 # ----- tasks / comments -----
 class Task(db.Model, PKMixin, TimestampMixin):
     __tablename__ = "tasks"
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id"), nullable=False, index=True
-    )
-    title: Mapped[str] = mapped_column(db.String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(db.Text)
-    status: Mapped[str] = mapped_column(
-        db.String(20), default="todo"
-    )  # todo/in_progress/done
-    assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
-    due_date: Mapped[dt_date | None]
-    order_index: Mapped[int] = mapped_column(default=0)
-
+    project_id = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    parent_task_id = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = mapped_column(db.String(200), nullable=False)
+    description = mapped_column(db.Text)
+    status = mapped_column(db.String(20), nullable=False, default="todo")
+    assignee_user_id = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    due_date = mapped_column(db.Date)
+    order_index = mapped_column(db.Integer, nullable=False, default=0)
     project = relationship("Project", back_populates="tasks")
-    comments = relationship(
-        "TaskComment", back_populates="task", cascade="all, delete-orphan"
+    parent = relationship(
+        "Task",
+        remote_side="Task.id",
+        back_populates="children",
     )
+    children = relationship(
+        "Task",
+        back_populates="parent",
+        cascade="all, delete-orphan",
+    )
+    comments = relationship(
+        "TaskComment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+    assignee = relationship("User")
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "parent_task_id": self.parent_task_id,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status,
+            "assignee_user_id": self.assignee_user_id,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "order_index": self.order_index,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
 
 
 class TaskComment(db.Model, PKMixin):
     __tablename__ = "task_comments"
-    task_id: Mapped[int] = mapped_column(
-        ForeignKey("tasks.id"), nullable=False, index=True
-    )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
-    )
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     body: Mapped[str] = mapped_column(db.Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
-
     task = relationship("Task", back_populates="comments")
+
 
 
 # ----- expenses (header) -----

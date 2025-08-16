@@ -172,24 +172,23 @@ def upgrade():
         batch_op.create_index(batch_op.f('ix_project_components_component_id'), ['component_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_project_components_project_id'), ['project_id'], unique=False)
 
-    op.create_table('tasks',
-    sa.Column('project_id', sa.Integer(), nullable=False),
-    sa.Column('title', sa.String(length=200), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('assignee_user_id', sa.Integer(), nullable=True),
-    sa.Column('due_date', sa.Date(), nullable=True),
-    sa.Column('order_index', sa.Integer(), nullable=False),
-    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), nullable=False),
-    sa.Column('deleted_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['assignee_user_id'], ['users.id'], ),
-    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    op.create_table(
+        "tasks",
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("parent_task_id", sa.Integer, sa.ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("title", sa.String(200), nullable=False),
+        sa.Column("description", sa.Text, nullable=True),
+        sa.Column("status", sa.Enum("todo", "in_progress", "done", name="task_status"), nullable=False, server_default="todo"),
+        sa.Column("assignee_user_id", sa.Integer, nullable=True),
+        sa.Column("due_date", sa.Date, nullable=True),
+        sa.Column("order_index", sa.Integer, nullable=False, server_default="0"),
+        sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
     )
-    with op.batch_alter_table('tasks', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_tasks_project_id'), ['project_id'], unique=False)
+    op.create_index("ix_tasks_project_order", "tasks", ["project_id", "order_index"])
+    op.create_index("ix_tasks_project_status", "tasks", ["project_id", "status"])
+    op.create_index("ix_tasks_due_date", "tasks", ["due_date"])
 
     op.create_table('expense_lines',
     sa.Column('expense_id', sa.Integer(), nullable=False),
@@ -288,4 +287,10 @@ def downgrade():
     op.drop_table('users')
     op.drop_table('clients')
     op.drop_table('categories')
+
+    op.drop_index("ix_tasks_project_order", table_name="tasks")
+    op.drop_index("ix_tasks_project_status", table_name="tasks")
+    op.drop_index("ix_tasks_due_date", table_name="tasks")
+    op.drop_table("tasks")
+    op.execute("DROP TYPE IF EXISTS task_status")
     # ### end Alembic commands ###
