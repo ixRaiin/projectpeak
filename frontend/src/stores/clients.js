@@ -1,31 +1,34 @@
-import { defineStore } from 'pinia'
-import { api } from '@/lib/api'
+// src/stores/clients.js
+import { defineStore } from 'pinia';
+import api from '@/lib/api';
 
 export const useClients = defineStore('clients', {
-  state: () => ({ items: [], loading: false, error: null }),
+  state: () => ({
+    items: [],
+    loading: false,
+    error: null,
+  }),
   actions: {
-    async fetchAll(q = '') {
-      this.loading = true; this.error = null
+    async fetchAll(params = {}) {
+      this.loading = true; this.error = null;
       try {
-        const res = await api(`/clients${q ? `?q=${encodeURIComponent(q)}` : ''}`)
-        this.items = res.clients ?? []
-      } catch (e) { this.error = e.message }
-      finally { this.loading = false }
+        const q = new URLSearchParams(params).toString();
+        const data = await api.get(`/clients${q ? `?${q}` : ''}`);
+        this.items = Array.isArray(data) ? data : (data.clients || []);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
     },
-    async create(payload) {
-      const created = await api('/clients', { method: 'POST', body: payload })
-      this.items.unshift(created)
-      return created
-    },
-    async update(id, patch) {
-      const updated = await api(`/clients/${id}`, { method: 'PATCH', body: patch })
-      const idx = this.items.findIndex(x => x.id === id)
-      if (idx !== -1) this.items[idx] = updated
-      return updated
+    async create(body) {
+      const c = await api.post('/clients', body);
+      this.items.unshift(c);
+      return c;
     },
     async remove(id) {
-      await api(`/clients/${id}`, { method: 'DELETE' })
-      this.items = this.items.filter(x => x.id !== id)
-    }
-  }
-})
+      await api.delete(`/clients/${id}`);
+      this.items = this.items.filter(x => x.id !== id);
+    },
+  },
+});

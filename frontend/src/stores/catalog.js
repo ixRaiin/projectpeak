@@ -1,36 +1,49 @@
-import { defineStore } from 'pinia'
-import { api } from '@/lib/api'
+// src/stores/catalog.js
+import { defineStore } from 'pinia';
+import api from '@/lib/api';
 
 export const useCatalog = defineStore('catalog', {
   state: () => ({
     categories: [],
-    components: [],
-    loadingCats: false,
-    loadingComps: false,
+    components: [],  // NOTE: filtered by last fetchComponents() call
+    loading: false,
     error: null,
   }),
   actions: {
-    async fetchCategories({ q = '', includeDeleted = false } = {}) {
-      this.loadingCats = true; this.error = null
+    async fetchCategories(params = {}) {
+      this.loading = true; this.error = null;
       try {
-        const qs = new URLSearchParams()
-        if (q) qs.set('q', q)
-        if (includeDeleted) qs.set('include_deleted', 'true')
-        const { categories } = await api(`/categories${qs.toString() ? `?${qs}` : ''}`)
-        this.categories = categories || []
-      } catch (e) { this.error = e.message }
-      finally { this.loadingCats = false }
+        const q = new URLSearchParams(params).toString();
+        const data = await api.get(`/categories${q ? `?${q}` : ''}`);
+        this.categories = Array.isArray(data) ? data : (data.categories || []);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
     },
-    async fetchComponents({ category_id, q = '' } = {}) {
-      this.loadingComps = true; this.error = null
+    async createCategory(body) {
+      const row = await api.post('/categories', body);
+      this.categories.unshift(row);
+      return row;
+    },
+
+    async fetchComponents(params = {}) {
+      this.loading = true; this.error = null;
       try {
-        const qs = new URLSearchParams()
-        if (category_id) qs.set('category_id', String(category_id))
-        if (q) qs.set('q', q)
-        const { components } = await api(`/components${qs.toString() ? `?${qs}` : ''}`)
-        this.components = components || []
-      } catch (e) { this.error = e.message }
-      finally { this.loadingComps = false }
+        const q = new URLSearchParams(params).toString();
+        const data = await api.get(`/components${q ? `?${q}` : ''}`);
+        this.components = Array.isArray(data) ? data : (data.components || []);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
     },
-  }
-})
+    async createComponent(body) {
+      const row = await api.post('/components', body);
+      this.components.unshift(row);
+      return row;
+    },
+  },
+});

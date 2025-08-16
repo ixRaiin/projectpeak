@@ -1,5 +1,6 @@
-import { defineStore } from 'pinia'
-import { api } from '@/lib/api'
+// src/stores/expenses.js
+import { defineStore } from 'pinia';
+import api from '@/lib/api';
 
 export const useExpenses = defineStore('expenses', {
   state: () => ({
@@ -9,25 +10,21 @@ export const useExpenses = defineStore('expenses', {
   }),
   actions: {
     async fetchForProject(pid) {
-      this.loading = true; this.error = null
+      this.loading = true; this.error = null;
       try {
-        const res = await api().get(`/projects/${pid}/expenses`)
-        this.items = res.expenses || []
+        const data = await api.get(`/projects/${pid}/expenses`);
+        this.items = Array.isArray(data) ? data : (data.expenses || []);
       } catch (e) {
-        this.error = e?.error || 'Failed to load expenses'
+        this.error = e.message;
       } finally {
-        this.loading = false
+        this.loading = false;
       }
     },
-    async create(pid, payload) {
-      this.error = null
-      try {
-        await api().post(`/projects/${pid}/expenses`, payload)
-        await this.fetchForProject(pid)
-      } catch (e) {
-        this.error = e?.error || 'Failed to create expense'
-        throw e
-      }
+    async create(pid, body) {
+      this.error = null;
+      const created = await api.post(`/projects/${pid}/expenses`, body);
+      this.items.unshift(created);
+      return created;
     },
   },
-})
+});

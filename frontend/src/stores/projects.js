@@ -1,5 +1,15 @@
-import { defineStore } from 'pinia'
-import { api } from '@/lib/api'
+// src/stores/projects.js
+import { defineStore } from 'pinia';
+import api from '@/lib/api';
+
+function asArray(x) {
+  // Accept [{...}], {items:[...]}, {rows:[...]}, {data:[...]}, null/undefined
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.items)) return x.items;
+  if (x && Array.isArray(x.rows)) return x.rows;
+  if (x && Array.isArray(x.data)) return x.data;
+  return [];
+}
 
 export const useProjects = defineStore('projects', {
   state: () => ({
@@ -7,94 +17,87 @@ export const useProjects = defineStore('projects', {
     loading: false,
     error: null,
     detail: {
-      projectId: null,
       cats: [],
       bom: [],
       summary: null,
-      loadingCats: false,
-      loadingBom: false,
-      loadingSummary: false,
-    }
+    },
   }),
   actions: {
-    async fetchAll({ q = '', client_id } = {}) {
-      this.loading = true; this.error = null
+    async fetchAll(params = {}) {
+      this.loading = true; this.error = null;
       try {
-        const qs = new URLSearchParams()
-        if (q) qs.set('q', q)
-        if (client_id) qs.set('client_id', String(client_id))
-        const res = await api(`/projects${qs.toString() ? `?${qs}` : ''}`)
-        this.items = res.projects ?? []
-      } catch (e) { this.error = e.message }
-      finally { this.loading = false }
+        const q = new URLSearchParams(params).toString();
+        const data = await api.get(`/projects${q ? `?${q}` : ''}`);
+        this.items = Array.isArray(data) ? data : (data.projects || []);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
     },
-    async create(payload) {
-      const created = await api('/projects', { method: 'POST', body: payload })
-      this.items.unshift(created)
-      return created
+    async fetchOne(id) {
+      this.loading = true; this.error = null;
+      try {
+        const p = await api.get(`/projects/${id}`);
+        // if not already in list, insert/replace
+        const i = this.items.findIndex(x => x.id === p.id);
+        if (i === -1) this.items.push(p); else this.items[i] = p;
+        return p;
+      } catch (e) {
+        this.error = e.message;
+        throw e;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async create(body) {
+      const created = await api.post('/projects', body);
+      return created;
     },
     async remove(id) {
-      await api(`/projects/${id}`, { method: 'DELETE' })
-      this.items = this.items.filter(p => p.id !== id)
+      await api.delete(`/projects/${id}`);
+      this.items = this.items.filter(p => p.id !== id);
     },
 
-    // ------- detail (categories / BOM / summary) -------
+    // ---------- detail ----------
     async openDetail(pid) {
-      this.detail.projectId = pid
-      await Promise.all([this.fetchProjectCats(pid), this.fetchProjectBom(pid), this.fetchProjectSummary(pid)])
+      this.error = null;
+      const [cats, bom, summary] = await Promise.all([
+        api.get(`/projects/${pid}/categories`),
+        api.get(`/projects/${pid}/components`),
+        api.get(`/projects/${pid}/summary`).catch(() => null),
+      ]);
+      this.detail.cats = asArray(cats);
+      this.detail.bom = asArray(bom);
+      this.detail.summary = summary;
     },
-    async fetchProjectCats(pid) {
-      this.detail.loadingCats = true
-      try {
-        const { categories } = await api(`/projects/${pid}/categories`)
-        this.detail.cats = categories ?? []
-      } finally { this.detail.loadingCats = false }
-    },
-    async addProjectCat(pid, { category_id, base_cost_usd = 0 }) {
-      return api(`/projects/${pid}/categories`, { method: 'POST', body: { category_id, base_cost_usd } })
-        .then(pc => { this.detail.cats.push(pc); return pc })
+
+    async addProjectCat(pid, body) {
+      const res = await api.post(`/projects/${pid}/categories`, body);
+      const row = res?.project_category || res; // accept wrapped or raw
+      if (!Array.isArray(this.detail.cats)) this.detail.cats = asArray(this.detail.cats);
+      this.detail.cats = [...this.detail.cats, row];
+      return row;
     },
     async deleteProjectCat(pid, pcid) {
-      await api(`/projects/${pid}/categories/${pcid}`, { method: 'DELETE' })
-      this.detail.cats = this.detail.cats.filter(x => x.id !== pcid)
+      await api.delete(`/projects/${pid}/categories/${pcid}`);
+      this.detail.cats = asArray(this.detail.cats).filter(r => r.id !== pcid);
     },
 
-    async fetchProjectBom(pid) {
-      this.detail.loadingBom = true
-      try {
-        const { components } = await api(`/projects/${pid}/components`)
-        this.detail.bom = components ?? []
-      } finally { this.detail.loadingBom = false }
-    },
     async addProjectBom(pid, body) {
-      return api(`/projects/${pid}/components`, { method: 'POST', body })
-        .then(row => { this.detail.bom.push(row); return row })
+      const res = await api.post(`/projects/${pid}/components`, body);
+      const row = res?.project_component || res;
+      if (!Array.isArray(this.detail.bom)) this.detail.bom = asArray(this.detail.bom);
+      this.detail.bom = [...this.detail.bom, row];
+      return row;
     },
-    async deleteProjectBom(pid, bid) {
-      await api(`/projects/${pid}/components/${bid}`, { method: 'DELETE' })
-      this.detail.bom = this.detail.bom.filter(x => x.id !== bid)
+    async deleteProjectBom(pid, id) {
+      await api.delete(`/projects/${pid}/components/${id}`);
+      this.detail.bom = asArray(this.detail.bom).filter(r => r.id !== id);
     },
 
     async fetchProjectSummary(pid) {
-      this.detail.loadingSummary = true
-      try {
-        this.detail.summary = await api(`/projects/${pid}/summary`)
-      } finally { this.detail.loadingSummary = false }
+      this.detail.summary = await api.get(`/projects/${pid}/summary`);
     },
-    async fetchOne(id) {
-      this.loading = true; this.error = null
-      try {
-        const res = await api().get(`/projects/${id}`)
-        const idx = this.items.findIndex(p => p.id === res.id)
-        if (idx >= 0) this.items[idx] = res
-        else this.items.push(res)
-        return res
-      } catch (e) {
-        this.error = e?.error || 'Failed to load project'
-        throw e
-      } finally {
-        this.loading = false
-      }
-    }
-  }
-})
+  },
+});
