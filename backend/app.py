@@ -30,7 +30,6 @@ def create_app():
     app.register_blueprint(expenses_bp)
     app.register_blueprint(tasks_bp)
 
-
     @app.get("/api/health")
     def health():
         return {"ok": True, "service": "projectpeak-api"}
