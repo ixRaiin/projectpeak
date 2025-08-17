@@ -30,6 +30,7 @@ def create_app():
     app.register_blueprint(expenses_bp)
     app.register_blueprint(tasks_bp)
 
+
     @app.get("/api/health")
     def health():
         return {"ok": True, "service": "projectpeak-api"}
@@ -43,4 +44,4 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5001, debug=True)
+    app.run(host="127.0.0.1", port=5001, debug=True) # Set debug=False in production
