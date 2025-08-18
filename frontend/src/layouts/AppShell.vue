@@ -1,13 +1,14 @@
 <template>
   <div class="min-h-screen flex">
     <!-- Desktop sidebar -->
-    <SideNav class="hidden md:block" />
+    <SidebarNav class="hidden md:block" />
 
     <!-- Content column -->
     <div class="flex-1 min-w-0 flex flex-col">
       <HeaderBar @toggle-nav="mobileOpen = true" />
 
-      <main class="page">
+      <!-- Slightly tighter spacing than the default .page -->
+      <main class="page !px-4 !py-4 md:!px-6 md:!py-6">
         <router-view />
       </main>
     </div>
@@ -17,7 +18,7 @@
       <div v-if="mobileOpen" class="fixed inset-0 z-50 md:hidden">
         <div class="absolute inset-0 bg-black/40" @click="mobileOpen = false" />
         <div class="absolute inset-y-0 left-0 w-[84vw] max-w-[20rem]">
-          <SideNav @navigate="mobileOpen = false" />
+          <SidebarNav @navigate="mobileOpen = false" />
         </div>
       </div>
     </teleport>
@@ -26,9 +27,8 @@
 
 <script setup>
 import { ref } from 'vue'
-import HeaderBar from '@/layouts/HeaderBar.vue'
-import SideNav from '@/layouts/SidebarNav.vue'
+import HeaderBar from './HeaderBar.vue'
+import SidebarNav from './SidebarNav.vue'
+
 const mobileOpen = ref(false)
 </script>
-
-

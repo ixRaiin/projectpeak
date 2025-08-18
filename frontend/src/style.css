@@ -33,6 +33,7 @@
 
   /* Ring */
   --ring-brand: 0 0 0 3px color-mix(in oklab, var(--color-navy), transparent 70%);
+
 }
 
 /* -----------------------------
@@ -41,6 +42,18 @@
 @layer base {
   html, body, #app { height: 100%; }
   html { scroll-behavior: smooth; }
+
+  html, body {
+  background-color: var(--color-cream) !important;
+  color: var(--color-text) !important;
+  }
+  html.dark, :root.dark, [data-theme="dark"] {
+    background-color: var(--color-cream) !important;
+  }
+  html.dark body {
+    background-color: var(--color-cream) !important;
+    color: var(--color-text) !important;
+  }
 
   body {
     background: var(--color-cream);
@@ -72,6 +85,16 @@
     --badge-error-bg:   color-mix(in oklab, var(--color-error), white 88%);
     --badge-error-brd:  color-mix(in oklab, var(--color-error), white 75%);
   }
+
+  /* Ensure primary buttons are visible */
+  .btn-primary {
+    @apply bg-black text-white px-3 py-2 rounded;
+  }
+
+  .btn-primary:hover {
+    @apply bg-gray-800;
+}
+
 }
 
 /* -----------------------------
