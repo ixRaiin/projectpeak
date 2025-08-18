@@ -158,7 +158,105 @@ def delete_task(pid, tid):
     db.session.delete(t)
     db.session.commit()
     return jsonify({"ok": True})
-    
+
+@bp.get("/projects/<int:pid>/tasks/progress")
+@auth_required
+def task_progress(pid):
+    from datetime import datetime, timezone
+
+    _project_or_404(pid)
+
+    # 1) Load once
+    tasks = Task.query.filter_by(project_id=pid).all()
+    if not tasks:
+        return jsonify({
+            "percent": 0.0,
+            "totals": {"done": 0, "total": 0, "leaves_done": 0, "leaves_total": 0},
+            "by_status": {"todo": 0, "doing": 0, "done": 0},
+            "computed_at": datetime.now(timezone.utc).isoformat()
+        })
+
+    # 2) Indexing
+    by_id = {t.id: t for t in tasks}
+    children = {}
+    for t in tasks:
+        children.setdefault(t.parent_task_id, []).append(t)
+
+    # Roots = tasks whose parent is None OR parent missing (defensive)
+    roots = [t for t in tasks if t.parent_task_id is None or t.parent_task_id not in by_id]
+
+    # Normalize status
+    def norm_status(s: str) -> str:
+        s = (s or "todo").strip().lower()
+        if s in ("doing", "in_progress", "in-progress", "in progress"):
+            return "doing"
+        if s == "done":
+            return "done"
+        return "todo"
+
+    by_status = {"todo": 0, "doing": 0, "done": 0}
+    for t in tasks:
+        by_status[norm_status(t.status)] += 1
+
+    # 3) DFS with memo + cycle guard
+    memo = {}
+    visiting = set()
+
+    def leaf_progress(status: str) -> float:
+        s = norm_status(status)
+        if s == "done":
+            return 1.0
+        if s == "doing":
+            return 0.5
+        return 0.0  # todo/unknown
+
+    def dfs(t: Task) -> float:
+        if t.id in memo:
+            return memo[t.id]
+        if t.id in visiting:  # cycle guard → treat as leaf
+            p = leaf_progress(t.status)
+            memo[t.id] = p
+            return p
+
+        visiting.add(t.id)
+        kids = children.get(t.id, [])
+        if not kids:  # leaf
+            p = leaf_progress(t.status)
+            memo[t.id] = p
+            visiting.remove(t.id)
+            return p
+
+        # parent progress = average of immediate children
+        vals = [dfs(c) for c in kids]
+        p = sum(vals) / len(vals)
+        memo[t.id] = p
+        visiting.remove(t.id)
+        return p
+
+    # 4) Leaves and totals
+    leaves = [t for t in tasks if not children.get(t.id)]
+    leaves_total = len(leaves)
+    leaves_done = sum(1 for t in leaves if norm_status(t.status) == "done")
+
+    # 5) Overall progress
+    if roots:
+        vals = [dfs(r) for r in roots]
+    else:
+        vals = [leaf_progress(t.status) for t in leaves] or [0.0]
+
+    overall = round((sum(vals) / len(vals)) * 100.0, 2)
+
+    return jsonify({
+        "percent": overall,
+        "totals": {
+            "done": by_status["done"],
+            "total": len(tasks),
+            "leaves_done": leaves_done,
+            "leaves_total": leaves_total
+        },
+        "by_status": by_status,
+        "computed_at": datetime.now(timezone.utc).isoformat()
+    })    
 
 @bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["GET"])
 @auth_required
