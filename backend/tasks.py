@@ -4,13 +4,43 @@ from flask import Blueprint, request, jsonify, abort, g
 from functools import wraps
 from sqlalchemy import func
 from .extensions import db
-from .models import Project, Task
+from .models import Project, Task, TaskComment
 from .auth import _get_token_from_request, _verify_token
 
 bp = Blueprint("tasks", __name__, url_prefix="/api")
+MAX_COMMENT_LEN = 4000
+
+def _extract_user_id(user):
+    # Accepts many shapes: ORM user, dict, tuple like (ok, id), plain int/str
+    if user is None:
+        return None
+    # ORM-like
+    uid = getattr(user, "id", None)
+    if isinstance(uid, int):
+        return uid
+    # dict-like
+    if isinstance(user, dict):
+        for k in ("id", "user_id", "uid"):
+            v = user.get(k)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+    # tuple/list-like: pick the first int inside (handles (True, 2))
+    if isinstance(user, (list, tuple)):
+        for v in user:
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+    # plain str/int
+    if isinstance(user, int):
+        return user
+    if isinstance(user, str) and user.isdigit():
+        return int(user)
+    return None
 
 def auth_required(fn):
-    """Guards a route using your token helpers."""
     @wraps(fn)
     def inner(*args, **kwargs):
         try:
@@ -18,10 +48,11 @@ def auth_required(fn):
             if not token:
                 return jsonify({"error": "UNAUTHORIZED", "detail": "missing token"}), 401
             user = _verify_token(token)
-            if not user:
+            uid = _extract_user_id(user)
+            if uid is None:
                 return jsonify({"error": "UNAUTHORIZED", "detail": "invalid token"}), 401
             g.current_user = user
-            g.user_id = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else user)
+            g.user_id = uid  # <- always an int now
         except Exception as e:
             return jsonify({"error": "UNAUTHORIZED", "detail": str(e)}), 401
         return fn(*args, **kwargs)
@@ -130,3 +161,53 @@ def task_progress(pid):
     done = Task.query.filter_by(project_id=pid, status="done").count()
     percent = 0 if total == 0 else round(done * 100 / total)
     return jsonify({"total": total, "done": done, "percent": percent})
+
+def _task_in_project_or_404(pid: int, tid: int) -> Task:
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        abort(404, description="Task not found")
+    return t
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["GET"])
+@auth_required
+def list_task_comments(pid, tid):
+    _project_or_404(pid)
+    t = _task_in_project_or_404(pid, tid)
+    # Use relationship ordering by created_at
+    return jsonify({"comments": [c.to_dict() for c in t.comments]})
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["POST"])
+@auth_required
+def create_task_comment(pid, tid):
+    _project_or_404(pid)
+    _task_in_project_or_404(pid, tid)
+
+    data = request.get_json(silent=True) or {}
+    body = (data.get("body") or "").strip()
+    if not body:
+        return jsonify({"error": "body is required"}), 400
+    if len(body) > MAX_COMMENT_LEN:
+        return jsonify({"error": f"body too long (max {MAX_COMMENT_LEN})"}), 400
+
+    c = TaskComment(task_id=tid, user_id=g.user_id, body=body)
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(c.to_dict()), 201
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments/<int:cid>", methods=["DELETE"])
+@auth_required
+def delete_task_comment(pid, tid, cid):
+    _project_or_404(pid)
+    _task_in_project_or_404(pid, tid)
+
+    c = TaskComment.query.filter_by(id=cid, task_id=tid).first()
+    if not c:
+        return jsonify({"error": "Comment not found"}), 404
+
+    # simple permission: author can delete (extend later for admins)
+    if c.user_id != g.user_id:
+        return jsonify({"error": "Forbidden"}), 403
+
+    db.session.delete(c)
+    db.session.commit()
+    return jsonify({"ok": True})
