@@ -30,29 +30,30 @@ def _parse_date(s: str | None) -> dt_date | None:
     except Exception:
         return None
     
-def _coerce_num(v, default=0.0):
+def _coerce_num(v, default=0.0) -> float:
     try:
         return float(v)
     except Exception:
         return float(default)
 
-def _recalculate_expense(exp: Expense, tax_rate: float | None = None) -> None:
-    # recompute line_total_usd per line and subtotal
+def _recalculate_expense(exp: Expense) -> None:
+    """Recompute per-line totals and (if columns exist) subtotal/tax/total."""
     subtotal = 0.0
     for ln in exp.lines:
         ln.qty = _coerce_num(getattr(ln, "qty", 0))
         ln.unit_price_usd = _coerce_num(getattr(ln, "unit_price_usd", 0))
         ln.line_total_usd = round(ln.qty * ln.unit_price_usd, 2)
         subtotal += ln.line_total_usd
-    # tax from project if not passed
-    if tax_rate is None and exp.project is not None:
-        tax_rate = _coerce_num(getattr(exp.project, "tax_rate", 0.0))
-    tax = round(subtotal * (tax_rate or 0.0), 2)
+    tax_rate = _coerce_num(getattr(exp.project, "tax_rate", 0.0))
+    tax = round(subtotal * tax_rate, 2)
     total = round(subtotal + tax, 2)
-    # set on expense (ensure these columns exist in your model)
-    exp.subtotal_usd = subtotal
-    exp.tax_usd = tax
-    exp.total_usd = total
+    if hasattr(exp, "subtotal_usd"):
+        exp.subtotal_usd = subtotal
+    if hasattr(exp, "tax_usd"):
+        exp.tax_usd = tax
+    if hasattr(exp, "total_usd"):
+        exp.total_usd = total
+
 
 def _expense_to_dict(e: Expense) -> dict:
     return {
@@ -161,21 +162,23 @@ def patch_expense(pid: int, eid: int):
     db.session.commit()
     return jsonify(_expense_to_dict(exp))
 
-@bp.post("/expenses/<int:eid>/lines")
+@bp.post("/<int:pid>/expenses/<int:eid>/lines")
 @require_auth
-def add_expense_line(eid: int):
-    exp = Expense.query.get_or_404(eid)
+def add_expense_line(pid: int, eid: int):
+    project = Project.query.get(pid)
+    if not project or getattr(project, "deleted_at", None) is not None:
+        return jsonify(error="not found"), 404
+    exp = Expense.query.filter_by(id=eid, project_id=pid).first()
+    if not exp:
+        return jsonify(error="not found"), 404
     data = request.get_json(silent=True) or {}
-
     cid = data.get("category_id")
     if not cid or not Category.query.get(cid):
         return jsonify(error="invalid category_id"), 400
-
     qty = _coerce_num(data.get("qty") if "qty" in data else data.get("quantity"), 0)
     unit = _coerce_num(data.get("unit_price_usd"), 0)
     if qty < 0 or unit < 0:
         return jsonify(error="negative qty or unit_price_usd"), 400
-
     ln = ExpenseLine(
         expense_id=eid,
         category_id=cid,
@@ -184,10 +187,8 @@ def add_expense_line(eid: int):
         line_total_usd=round(qty * unit, 2),
     )
     db.session.add(ln)
-    # recalc totals
     _recalculate_expense(exp)
     db.session.commit()
-
     return jsonify({
         "id": ln.id,
         "expense_id": eid,
@@ -198,40 +199,39 @@ def add_expense_line(eid: int):
     }), 201
 
 
-@bp.patch("/expenses/<int:eid>/lines/<int:lid>")
+@bp.patch("/<int:pid>/expenses/<int:eid>/lines/<int:lid>")
 @require_auth
-def patch_expense_line(eid: int, lid: int):
-    exp = Expense.query.get_or_404(eid)
+def patch_expense_line(pid: int, eid: int, lid: int):
+    project = Project.query.get(pid)
+    if not project or getattr(project, "deleted_at", None) is not None:
+        return jsonify(error="not found"), 404
+    exp = Expense.query.filter_by(id=eid, project_id=pid).first()
+    if not exp:
+        return jsonify(error="not found"), 404
     ln = ExpenseLine.query.filter_by(id=lid, expense_id=eid).first()
     if not ln:
         return jsonify(error="line not found"), 404
-
     data = request.get_json(silent=True) or {}
-
     if "category_id" in data:
         cid = data.get("category_id")
         if not cid or not Category.query.get(cid):
             return jsonify(error="invalid category_id"), 400
         ln.category_id = cid
-
     if "qty" in data or "quantity" in data:
         qv = data.get("qty") if "qty" in data else data.get("quantity")
         qv = _coerce_num(qv, ln.qty)
         if qv < 0:
             return jsonify(error="qty cannot be negative"), 400
         ln.qty = qv
-
     if "unit_price_usd" in data:
         up = _coerce_num(data.get("unit_price_usd"), ln.unit_price_usd)
         if up < 0:
             return jsonify(error="unit_price_usd cannot be negative"), 400
         ln.unit_price_usd = up
-
-    # recompute this line and expense totals
-    ln.line_total_usd = round(ln.qty * ln.unit_price_usd, 2)
+    ln.qty = _coerce_num(ln.qty, ln.qty)
+    ln.unit_price_usd = _coerce_num(ln.unit_price_usd, ln.unit_price_usd)
     _recalculate_expense(exp)
     db.session.commit()
-
     return jsonify({
         "id": ln.id,
         "expense_id": eid,
@@ -241,18 +241,19 @@ def patch_expense_line(eid: int, lid: int):
         "line_total_usd": float(ln.line_total_usd),
     })
 
-
-@bp.delete("/expenses/<int:eid>/lines/<int:lid>")
+@bp.delete("/<int:pid>/expenses/<int:eid>/lines/<int:lid>")
 @require_auth
-def delete_expense_line(eid: int, lid: int):
-    exp = Expense.query.get_or_404(eid)
+def delete_expense_line(pid: int, eid: int, lid: int):
+    project = Project.query.get(pid)
+    if not project or getattr(project, "deleted_at", None) is not None:
+        return jsonify(error="not found"), 404
+    exp = Expense.query.filter_by(id=eid, project_id=pid).first()
+    if not exp:
+        return jsonify(error="not found"), 404
     ln = ExpenseLine.query.filter_by(id=lid, expense_id=eid).first()
     if not ln:
         return jsonify(error="line not found"), 404
-
     db.session.delete(ln)
     _recalculate_expense(exp)
     db.session.commit()
     return jsonify(ok=True)
-
-
