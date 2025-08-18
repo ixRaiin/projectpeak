@@ -65,6 +65,12 @@ def _project_or_404(pid: int) -> Project:
         abort(404, description="Project not found")
     return p
 
+def _task_in_project_or_404(pid: int, tid: int) -> Task:
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        abort(404, description="Task not found")
+    return t
+
 # GET
 @bp.route("/projects/<int:pid>/tasks", methods=["GET"])
 @auth_required
@@ -152,21 +158,7 @@ def delete_task(pid, tid):
     db.session.delete(t)
     db.session.commit()
     return jsonify({"ok": True})
-
-
-@bp.get("/projects/<int:pid>/tasks/progress")
-@auth_required
-def task_progress(pid):
-    total = Task.query.filter_by(project_id=pid).count()
-    done = Task.query.filter_by(project_id=pid, status="done").count()
-    percent = 0 if total == 0 else round(done * 100 / total)
-    return jsonify({"total": total, "done": done, "percent": percent})
-
-def _task_in_project_or_404(pid: int, tid: int) -> Task:
-    t = Task.query.filter_by(project_id=pid, id=tid).first()
-    if not t:
-        abort(404, description="Task not found")
-    return t
+    
 
 @bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["GET"])
 @auth_required
