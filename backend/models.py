@@ -180,7 +180,7 @@ class ProjectComponent(db.Model, PKMixin, TimestampMixin):
 class Task(db.Model, PKMixin, TimestampMixin):
     __tablename__ = "tasks"
     project_id = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
-    parent_task_id = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_task_id = db.Column(db.Integer, db.ForeignKey("tasks.id", name="fk_tasks_parent"), nullable=True, index=True)
     title = mapped_column(db.String(200), nullable=False)
     description = mapped_column(db.Text)
     status = mapped_column(db.String(20), nullable=False, default="todo")
@@ -198,10 +198,11 @@ class Task(db.Model, PKMixin, TimestampMixin):
         back_populates="parent",
         cascade="all, delete-orphan",
     )
-    comments = relationship(
+    comments = db.relationship(
         "TaskComment",
         back_populates="task",
         cascade="all, delete-orphan",
+        order_by="TaskComment.created_at"
     )
     assignee = relationship("User")
     def to_dict(self) -> dict:
@@ -220,14 +221,22 @@ class Task(db.Model, PKMixin, TimestampMixin):
         }
 
 
-class TaskComment(db.Model, PKMixin):
+class TaskComment(db.Model):
     __tablename__ = "task_comments"
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    body: Mapped[str] = mapped_column(db.Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
-    task = relationship("Task", back_populates="comments")
-
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id", name="fk_task_comments_task"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", name="fk_task_comments_user"), nullable=False, index=True)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    task = db.relationship("Task", back_populates="comments")
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "user_id": self.user_id,
+            "body": self.body,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+        }
 
 
 # ----- expenses (header) -----
