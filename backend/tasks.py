@@ -20,21 +20,21 @@ def auth_required(fn):
             user = _verify_token(token)
             if not user:
                 return jsonify({"error": "UNAUTHORIZED", "detail": "invalid token"}), 401
-            # normalize for downstream use
             g.current_user = user
             g.user_id = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else user)
         except Exception as e:
-            # keep this 401 to avoid leaking internals
             return jsonify({"error": "UNAUTHORIZED", "detail": str(e)}), 401
         return fn(*args, **kwargs)
     return inner
 
+# Ensure the project exists or return 404
 def _project_or_404(pid: int) -> Project:
     p = Project.query.get(pid)
     if not p:
         abort(404, description="Project not found")
     return p
 
+# GET
 @bp.route("/projects/<int:pid>/tasks", methods=["GET"])
 @auth_required
 def list_tasks(pid):
@@ -46,6 +46,7 @@ def list_tasks(pid):
     )
     return jsonify({"tasks": [t.to_dict() for t in rows]})
 
+# POST
 @bp.route("/projects/<int:pid>/tasks", methods=["POST"])
 @auth_required
 def create_task(pid):
@@ -75,18 +76,18 @@ def create_task(pid):
     db.session.commit()
     return jsonify(t.to_dict()), 201
 
+# PATCH
 @bp.route("/projects/<int:pid>/tasks/<int:tid>", methods=["PATCH"])
 @auth_required
 def update_task(pid, tid):
-    _project_or_404(pid)
-    t = Task.query.get_or_404(tid)
-    if t.project_id != pid:
-        abort(404)
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        return jsonify({"error": "Task not found"}), 404
     data = request.get_json(silent=True) or {}
     if "title" in data:
         title = (data["title"] or "").strip()
         if not title:
-            abort(400, description="title cannot be empty")
+            return jsonify({"error": "title cannot be empty"}), 400
         t.title = title
     if "description" in data:
         t.description = data["description"] or None
@@ -100,20 +101,27 @@ def update_task(pid, tid):
         t.order_index = int(data["order_index"] or 0)
     if "due_date" in data:
         v = data["due_date"]
-        t.due_date = date.fromisoformat(v) if v else None
+        if not v:
+            t.due_date = None
+        else:
+            try:
+                t.due_date = date.fromisoformat(v)
+            except Exception:
+                return jsonify({"error": "Invalid due_date, expected YYYY-MM-DD"}), 400
     db.session.commit()
     return jsonify(t.to_dict())
 
+# DELETE
 @bp.route("/projects/<int:pid>/tasks/<int:tid>", methods=["DELETE"])
 @auth_required
 def delete_task(pid, tid):
-    _project_or_404(pid)
-    t = Task.query.get_or_404(tid)
-    if t.project_id != pid:
-        abort(404)
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        return jsonify({"error": "Task not found"}), 404
     db.session.delete(t)
     db.session.commit()
     return jsonify({"ok": True})
+
 
 @bp.get("/projects/<int:pid>/tasks/progress")
 @auth_required
