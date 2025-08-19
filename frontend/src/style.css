@@ -204,18 +204,25 @@
 @utility badge {
   @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium;
 }
-@utility badge-neutral {
-  @apply badge bg-white border-[--color-border-warm] text-[--color-text-2];
-}
 @utility badge-success {
-  @apply badge text-[--color-success] bg-[--badge-success-bg] border-[--badge-success-brd];
+  background: var(--badge-success-bg);
+  border: 1px solid var(--badge-success-brd);
+  color: var(--color-success);
 }
 @utility badge-warn {
-  @apply badge text-[--color-warning] bg-[--badge-warn-bg] border-[--badge-warn-brd];
+  background: var(--badge-warn-bg);
+  border: 1px solid var(--badge-warn-brd);
+  color: var(--color-warning);
 }
-@utility badge-error {
-  @apply badge text-[--color-error] bg-[--badge-error-bg] border-[--badge-error-brd];
+@utility badge-neutral {
+  @apply bg-white border border-[--color-border-warm] text-[--color-text-2];
 }
+
+/* --- Progress bar color helpers --- */
+@utility progress-green { @apply bg-[--color-success]; }
+@utility progress-amber { @apply bg-[--color-warning]; }
+@utility progress-navy  { @apply bg-[--color-navy]; }
+
 
 /* -----------------------------
    Skeleton / Shimmer

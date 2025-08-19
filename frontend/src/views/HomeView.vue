@@ -4,30 +4,36 @@ import { RouterLink } from 'vue-router'
 import api from '@/lib/api'
 import { useAuth } from '@/stores/auth'
 
+// Auth
 const auth = useAuth()
 
+// Loading & data
 const loading = ref(true)
 const errorMsg = ref('')
 const projects = ref([])
 
+// Filters
 const q = ref('')
 const status = ref('all')
 const client = ref('all')
 
-const summaryById = reactive(new Map())
-const progressById = reactive(new Map())
+// Caches
+const summaryById = reactive(new Map())   // pid -> { planned, actual, variance }
+const progressById = reactive(new Map())  // pid -> { percent, counts }
 
+// Concurrency control for background fetches
 const MAX_CONCURRENT = 4
 const queue = []
 let active = 0
 function run(task){ return new Promise(res => { queue.push({task,res}); pump() }) }
 function pump(){ while(active<MAX_CONCURRENT && queue.length){ const {task,res}=queue.shift(); active++; task().finally(()=>{active--;res();pump()}) } }
 
+// ---------- API ----------
 async function loadProjects() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const res = await api.get('/projects')
+    const res = await api.get('/projects') // api.js prefixes /api
     const list = Array.isArray(res) ? res : (res.projects || [])
     projects.value = list
   } catch (e) {
@@ -77,8 +83,12 @@ function fetchProgress(pid) {
   return p
 }
 
+// ---------- Derived ----------
 const statuses = computed(() => ['all', ...new Set(projects.value.map(p => p.status).filter(Boolean)) ])
 const clients  = computed(() => ['all', ...new Set(projects.value.map(p => p.client_name).filter(Boolean)) ])
+
+// Show ONLY 5 rows
+const PAGE_SIZE = 5
 
 const filtered = computed(() => {
   const k = q.value.trim().toLowerCase()
@@ -90,7 +100,6 @@ const filtered = computed(() => {
   })
 })
 
-const PAGE_SIZE = 8
 const visible = computed(() => filtered.value.slice(0, PAGE_SIZE))
 
 watch(visible, (rows) => {
@@ -100,6 +109,7 @@ watch(visible, (rows) => {
   })
 }, { immediate: true })
 
+// KPIs
 const kpiActiveCount = computed(() =>
   projects.value.filter(p => (p.status || '').toLowerCase() === 'active').length
 )
@@ -111,8 +121,26 @@ const kpiTotalActual = computed(() => {
   let t = 0; projects.value.forEach(p => { t += Number(summaryById.get(p.id)?.actual || 0) }); return t
 })
 
+// Formatters
 const fmtCurrency = (n) => new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(Number(n||0))
 const fmtPercent  = (n) => `${Math.round(Number(n||0))}%`
+
+// Status → badge class (planned=amber, active=green, completed=neutral)
+function statusClass(status) {
+  const s = String(status || '').toLowerCase()
+  if (s === 'active') return 'badge-success'
+  if (s === 'planned') return 'badge-warn'
+  if (s === 'completed' || s === 'done' || s === 'finished') return 'badge-neutral'
+  return 'badge-neutral'
+}
+
+// Progress percent → color class (<=33 amber, 34–66 navy, >=67 green)
+function progressClass(pct) {
+  const n = Number(pct || 0)
+  if (n >= 67) return 'progress-green'
+  if (n >= 34) return 'progress-navy'
+  return 'progress-amber'
+}
 
 onMounted(loadProjects)
 </script>
@@ -130,7 +158,7 @@ onMounted(loadProjects)
       <div class="text-[--color-error] text-sm">{{ errorMsg }}</div>
     </div>
 
-    <!-- KPIs (tighter gap) -->
+    <!-- KPIs -->
     <div class="grid gap-4 md:grid-cols-3">
       <div class="section">
         <div class="muted mb-1">Active Projects</div>
@@ -154,10 +182,11 @@ onMounted(loadProjects)
       </div>
     </div>
 
-    <!-- Content grid (slightly reduced spacing) -->
+    <!-- Content grid -->
     <div class="grid gap-4 mt-5 md:grid-cols-3">
-      <!-- Projects mini-table -->
+      <!-- Projects table -->
       <section class="section md:col-span-2">
+        <!-- Filters -->
         <div class="flex flex-col sm:flex-row sm:items-end gap-3 mb-3">
           <div class="flex-1">
             <label class="label">Search</label>
@@ -178,52 +207,98 @@ onMounted(loadProjects)
         </div>
 
         <div class="card p-0 overflow-hidden">
-          <div class="grid grid-cols-6 px-4 py-2 border-b border-[--color-border-warm] text-sm font-medium">
-            <div class="col-span-1">Code</div>
-            <div class="col-span-2">Project</div>
-            <div class="col-span-1">Client</div>
-            <div class="col-span-1 text-right">Actual</div>
-            <div class="col-span-1 text-right">Progress</div>
+          <div class="overflow-x-auto">
+            <table class="table-base w-full">
+              <thead class="table-head">
+                <tr class="text-xs uppercase tracking-wide text-[--color-text-3] border-b border-[--color-border-warm]">
+                  <th class="text-left font-medium px-4 py-2">Code</th>
+                  <th class="text-left font-medium px-4 py-2">Project</th>
+                  <th class="text-left font-medium px-4 py-2">Client</th>
+                  <th class="text-right font-medium px-4 py-2">Actual</th>
+                  <th class="text-right font-medium px-4 py-2 w-44">Progress</th>
+                </tr>
+              </thead>
+
+              <!-- Loading skeleton rows -->
+              <tbody v-if="loading">
+                <tr v-for="i in 5" :key="i" class="border-b border-[--color-border-warm]">
+                  <td class="px-4 py-3"><span class="skeleton h-4 w-24 block"></span></td>
+                  <td class="px-4 py-3"><span class="skeleton h-4 w-56 block"></span></td>
+                  <td class="px-4 py-3"><span class="skeleton h-4 w-28 block"></span></td>
+                  <td class="px-4 py-3 text-right"><span class="skeleton h-4 w-20 inline-block"></span></td>
+                  <td class="px-4 py-3 text-right"><span class="skeleton h-4 w-24 inline-block"></span></td>
+                </tr>
+              </tbody>
+
+              <!-- Data rows -->
+              <tbody v-else>
+                <tr
+                  v-for="p in visible"
+                  :key="p.id"
+                  class="table-row border-b border-[--color-border-warm] text-sm"
+                >
+                  <td class="px-4 py-2 font-medium whitespace-nowrap">
+                    {{ p.code }}
+                  </td>
+
+                  <td class="px-4 py-2">
+                    <div class="truncate">{{ p.name }}</div>
+                    <div v-if="p.status" class="mt-0.5">
+                      <span :class="['badge', statusClass(p.status)]">{{ p.status }}</span>
+                    </div>
+                  </td>
+
+                  <td class="px-4 py-2 whitespace-nowrap truncate">
+                    {{ p.client_name || '—' }}
+                  </td>
+
+                  <td class="px-4 py-2 text-right whitespace-nowrap">
+                    <template v-if="summaryById.get(p.id)">
+                      {{ fmtCurrency(summaryById.get(p.id).actual) }}
+                    </template>
+                    <template v-else>
+                      <span class="skeleton h-4 w-20 inline-block"></span>
+                    </template>
+                  </td>
+
+                  <td class="px-4 py-2">
+                    <div class="flex items-center justify-end gap-2">
+                      <div class="w-28 h-1.5 bg-black/10 rounded-full overflow-hidden">
+                        <div
+                          class="h-full rounded-full transition-all"
+                          :class="progressClass(progressById.get(p.id)?.percent)"
+                          :style="{ width: (progressById.get(p.id)?.percent || 0) + '%' }"
+                        />
+                      </div>
+                      <div class="text-xs text-[--color-text-3] w-8 text-right">
+                        <template v-if="progressById.get(p.id)">
+                          {{ Math.round(progressById.get(p.id).percent) }}%
+                        </template>
+                        <template v-else>—</template>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr v-if="!visible.length">
+                  <td colspan="5" class="px-4 py-6 text-center muted">
+                    No projects match your filters.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          <template v-if="loading">
-            <div v-for="i in 8" :key="i" class="px-4 py-3 border-b border-[--color-border-warm]">
-              <div class="skeleton h-5 w-full"></div>
-            </div>
-          </template>
-
-          <template v-else>
-            <div
-              v-for="p in visible"
-              :key="p.id"
-              class="grid grid-cols-6 px-4 py-3 border-b border-[--color-border-warm] table-row"
-            >
-              <div class="col-span-1 font-medium">{{ p.code }}</div>
-              <div class="col-span-2">
-                <div class="truncate">{{ p.name }}</div>
-                <div class="muted">Status: {{ p.status || '—' }}</div>
-              </div>
-              <div class="col-span-1 truncate">{{ p.client_name || '—' }}</div>
-              <div class="col-span-1 text-right">
-                <span v-if="!summaryById.get(p.id)"><span class="skeleton h-4 w-20 inline-block"></span></span>
-                <span v-else>{{ fmtCurrency(summaryById.get(p.id).actual) }}</span>
-              </div>
-              <div class="col-span-1 text-right">
-                <span v-if="!progressById.get(p.id)"><span class="skeleton h-4 w-12 inline-block"></span></span>
-                <span v-else>{{ fmtPercent(progressById.get(p.id).percent) }}</span>
-              </div>
-            </div>
-
-            <div v-if="!visible.length" class="px-4 py-6 text-center muted">No projects match your filters.</div>
-
-            <div class="px-4 py-3 text-right">
-              <RouterLink to="/projects" class="btn btn-primary btn-primary-hover">View all projects</RouterLink>
-            </div>
-          </template>
+          <!-- Footer action -->
+          <div class="px-4 py-3 text-right">
+            <RouterLink to="/projects" class="btn btn-primary btn-primary-hover">
+              View all projects
+            </RouterLink>
+          </div>
         </div>
       </section>
 
-      <!-- Finance Tracker -->
+      <!-- Finance Tracker (unchanged) -->
       <section class="section">
         <div class="mb-3">
           <div class="heading">Finance Tracker</div>

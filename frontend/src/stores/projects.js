@@ -28,13 +28,20 @@ export const useProjects = defineStore('projects', {
       try {
         const q = new URLSearchParams(params).toString();
         const data = await api.get(`/projects${q ? `?${q}` : ''}`);
-        this.items = Array.isArray(data) ? data : (data.projects || []);
+
+        // Accept [], {items:[]}, {rows:[]}, {data:[]}, {projects:[]}
+        let arr = asArray(data);
+        if (!arr.length && data && Array.isArray(data.projects)) arr = data.projects;
+
+        this.items = arr;
       } catch (e) {
-        this.error = e.message;
+        this.error = e?.message || 'Failed to load projects';
+        this.items = [];
       } finally {
         this.loading = false;
       }
     },
+
     async fetchOne(id) {
       this.loading = true; this.error = null;
       try {

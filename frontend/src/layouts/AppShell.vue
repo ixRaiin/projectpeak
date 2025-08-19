@@ -1,13 +1,13 @@
 <template>
   <div class="min-h-screen flex">
-    <!-- Desktop sidebar -->
-    <SidebarNav class="hidden md:block" />
+    <!-- Sidebar (always visible on desktop) -->
+    <SidebarNav />
 
     <!-- Content column -->
     <div class="flex-1 min-w-0 flex flex-col">
       <HeaderBar @toggle-nav="mobileOpen = true" />
 
-      <!-- Slightly tighter spacing than the default .page -->
+      <!-- Tighter spacing -->
       <main class="page !px-4 !py-4 md:!px-6 md:!py-6">
         <router-view />
       </main>
