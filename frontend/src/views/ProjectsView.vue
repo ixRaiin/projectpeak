@@ -24,22 +24,21 @@
         v-if="view === 'table'"
         :items="projects.items"
         :client-name="clientName"
-        @view="openDetail"
+        @edit="openEdit"
+        @tasks="openTasks"
+        @expenses="openExpenses"
         @delete="confirmDelete"
-        @add-expense="openAddExpense"
-        @open-board="openBoard"
       />
 
       <ProjectGrid
         v-else
         :items="projects.items"
         :client-name="clientName"
-        @view="openDetail"
+        @edit="openEdit"
+        @tasks="openTasks"
+        @expenses="openExpenses"
         @delete="confirmDelete"
-        @add-expense="openAddExpense"
-        @open-board="openBoard"
       />
-
       <p v-if="!projects.items.length" class="text-sm text-gray-500 mt-4">No projects found.</p>
       <p v-if="projects.error" class="text-sm text-red-600 mt-2">{{ projects.error }}</p>
     </div>
@@ -76,7 +75,6 @@ watch(view, (v) => {
   localStorage.setItem('projects:view', v)
   router.replace({ query: { ...route.query, view: v } })
 })
-
 // ----- client lookup helper -----
 const clientMap = computed(() => {
   const m = Object.create(null)
@@ -102,11 +100,28 @@ const onToggle = (v) => { view.value = v }
 const goCreate = () => router.push({ name: 'project-new' })
 
 // ----- row/card actions -----
-const openDetail = (p) => router.push({ name: 'project-detail', params: { id: p.id } })
-const openAddExpense = (p) =>
-  router.push({ name: 'project-detail', params: { id: p.id }, query: { open: 'add-expense' } })
-const openBoard = (p) =>
+const openEdit = (p) =>
+  router.push({ name: 'project-detail', params: { id: p.id }, query: { tab: 'summary', mode: 'edit' } })
+
+const openTasks = async (p) => {
+  const { progress, suggestion } = await projects.syncStatusWithTasks(p.id, { promptOnComplete: true })
+  if (progress && typeof progress.percent === 'number') {
+    const idx = projects.items.findIndex(x => x.id === p.id)
+    if (idx !== -1) {
+      projects.items[idx] = { ...projects.items[idx], progress_percent: progress.percent }
+    }
+  }
+  if (suggestion === 'completed' && p.status !== 'completed') {
+    const ok = confirm(`All tasks are complete for “${p.name}”. Mark the project as Completed?`)
+    if (ok) {
+      await projects.updateStatus(p.id, 'completed')
+    }
+  }
   router.push({ name: 'project-detail', params: { id: p.id }, query: { tab: 'tasks' } })
+}
+
+const openExpenses = (p) =>
+  router.push({ name: 'project-detail', params: { id: p.id }, query: { tab: 'expenses', open: 'add' } })
 
 const confirmDelete = async (p) => {
   if (confirm(`Delete project “${p.name}”?`)) {

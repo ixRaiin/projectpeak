@@ -31,9 +31,9 @@
           </td>
           <td class="px-3 py-2">
             <div class="flex justify-end gap-2">
-              <button class="underline" @click="$emit('view', p)">View</button>
-              <button class="underline" @click="$emit('open-board', p)">Open Board</button>
-              <button class="underline" @click="$emit('add-expense', p)">Add Expense</button>
+              <button class="underline" @click="$emit('edit', p)">Edit</button>
+              <button class="underline" @click="$emit('tasks', p)">Board</button>
+              <button class="underline" @click="$emit('expenses', p)">Expenses</button>
               <button class="text-red-600 underline" @click="$emit('delete', p)">Delete</button>
             </div>
           </td>
