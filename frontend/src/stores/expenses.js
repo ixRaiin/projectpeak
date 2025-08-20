@@ -15,27 +15,61 @@ const sortByDateDesc = (a, b) =>
   String(b?.expense_date || '').localeCompare(String(a?.expense_date || ''))
 
 function normalizeLine(input = {}) {
-  // Accept qty or quantity; coerce numbers; allow fallback from component_unit_price
-  const quantity = Number(
-    input.quantity != null ? input.quantity : (input.qty != null ? input.qty : 1)
-  )
-  const unit_price_usd_raw =
+  const qRaw = input.quantity != null ? input.quantity : (input.qty != null ? input.qty : 1)
+  const qty = Number.isFinite(Number(qRaw)) ? Number(qRaw) : 1
+
+  const upRaw =
     input.unit_price_usd != null && input.unit_price_usd !== ''
       ? input.unit_price_usd
       : (input.component_unit_price != null ? input.component_unit_price : 0)
-
-  const unit_price_usd = Number(unit_price_usd_raw)
+  const unit_price_usd = Number.isFinite(Number(upRaw)) ? Number(upRaw) : 0
 
   const out = {
     category_id: Number(input.category_id),
     component_id: input.component_id != null ? Number(input.component_id) : undefined,
-    quantity: Number.isFinite(quantity) ? quantity : 1,
-    unit_price_usd: Number.isFinite(unit_price_usd) ? unit_price_usd : 0,
+    qty,
+    quantity: qty,
+    unit_price_usd,
   }
-
   if (out.component_id === undefined) delete out.component_id
   return out
 }
+
+function normalizeLineFromServer(input = {}) {
+  // quantity can be `quantity` or `qty`
+  const qRaw = input.quantity != null ? input.quantity : input.qty
+  const quantity = Number(qRaw)
+  const safeQty = Number.isFinite(quantity) ? quantity : 1
+
+  // unit price can be `unit_price_usd` or `component_unit_price` (and a few aliases)
+  const upRaw =
+    input.unit_price_usd != null ? input.unit_price_usd
+    : (input.component_unit_price != null ? input.component_unit_price
+    : (input.unit_price != null ? input.unit_price
+    : (input.price_usd != null ? input.price_usd
+    : input.price)))
+
+  const unit_price_usd = Number.isFinite(Number(upRaw)) ? Number(upRaw) : 0
+
+  // prefer server-provided line total if present, else compute
+  const preTotal =
+    input.line_total_usd ?? input.total_usd ?? input.total ?? null
+  const line_total_usd = Number.isFinite(Number(preTotal))
+    ? Number(preTotal)
+    : safeQty * unit_price_usd
+
+  const out = {
+    id: input.id, // keep id if you have it
+    category_id: Number(input.category_id),
+    component_id: input.component_id != null ? Number(input.component_id) : undefined,
+    quantity: safeQty,
+    unit_price_usd,
+    line_total_usd,
+  }
+  if (out.component_id === undefined) delete out.component_id
+  return out
+}
+
 
 export const useExpensesStore = defineStore('expenses', {
   state: () => ({
@@ -56,8 +90,15 @@ export const useExpensesStore = defineStore('expenses', {
       try {
         const res = await api.get(`/projects/${pid}/expenses`)
         const list = asArray(res).slice().sort(sortByDateDesc)
-        this.byProject[pid] = list
-        return list
+
+        // ⬇️ normalize lines from server so the UI always has `quantity`
+        const normalized = list.map(e => ({
+          ...e,
+          lines: Array.isArray(e.lines) ? e.lines.map(normalizeLineFromServer) : [],
+        }))
+
+        this.byProject[pid] = normalized
+        return normalized
       } catch (e) {
         this.errors.expenses = e?.message || 'Failed to load expenses'
         this.byProject[pid] = this.byProject[pid] || []

@@ -13,7 +13,7 @@
       </div>
       <div class="min-w-[200px]">
         <div class="h-2 bg-gray-100 rounded">
-          <div class="h-2 rounded bg-black" :style="{ width: (localProgress ?? project?.progress_percent ?? 0) + '%' }"></div>
+          <div class="m-3 h-2 rounded bg-black" :style="{ width: (localProgress ?? project?.progress_percent ?? 0) + '%' }"></div>
         </div>
       </div>
     </div>
@@ -101,50 +101,82 @@
     </div>
 
     <!-- Expenses -->
-    <div v-else-if="activeTab === 'expenses'" class="space-y-4">
-      <div class="flex items-center justify-between">
-        <h2 class="font-semibold">Expenses</h2>
-        <button class="px-3 py-2 rounded bg-black text-white" @click="openAddExpense">
-          Add Expense
-        </button>
-      </div>
+<div v-else-if="activeTab === 'expenses'" class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h2 class="font-semibold">Expenses</h2>
+    <button class="px-3 py-2 rounded bg-black text-white" @click="openAddExpense">
+      Add Expense
+    </button>
+  </div>
 
-      <div v-if="exp.loading.expenses">Loading expenses…</div>
-      <div v-else>
-        <table class="w-full text-sm border rounded overflow-hidden">
-          <thead class="bg-gray-50 text-left">
-            <tr>
-              <th class="px-3 py-2">Date</th>
-              <th class="px-3 py-2">Vendor</th>
-              <th class="px-3 py-2">Reference</th>
-              <th class="px-3 py-2">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="e in expensesForProject" :key="e.id" class="border-t">
-              <td class="px-3 py-2">{{ e.expense_date }}</td>
-              <td class="px-3 py-2">{{ e.vendor || '—' }}</td>
-              <td class="px-3 py-2">{{ e.reference_no || '—' }}</td>
-              <td class="px-3 py-2 text-gray-600 truncate">{{ e.memo ?? e.note ?? '—' }}</td>
-            </tr>
-            <tr v-if="!expensesForProject.length">
-              <td colspan="4" class="px-3 py-4 text-gray-500">No expenses yet.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+  <div v-if="exp.loading.expenses">Loading expenses…</div>
+  <div v-else>
+    <table class="w-full text-sm border rounded overflow-hidden">
+      <thead class="bg-gray-50 text-left">
+        <tr>
+          <th class="px-3 py-2">Date</th>
+          <th class="px-3 py-2">Vendor</th>
+          <th class="px-3 py-2">Reference</th>
+          <th class="px-3 py-2">Note</th>
+          <th class="px-3 py-2 text-right">Unit Price</th>
+          <th class="px-3 py-2 text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="e in expensesForProject" :key="e.id" class="border-t">
+          <td class="px-3 py-2">{{ e.expense_date }}</td>
+          <td class="px-3 py-2">{{ e.vendor || '—' }}</td>
+          <td class="px-3 py-2">{{ e.reference_no || '—' }}</td>
+          <td class="px-3 py-2 text-gray-600">
+            {{ truncateNote(e.memo ?? e.note ?? '—') }}
+          </td>
 
-      <!-- Add Expense Modal -->
-      <div v-if="showAddExpense" class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-6">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-lg font-semibold">Add Expense</h3>
-            <button class="text-sm underline" @click="closeAddExpense">Close</button>
-          </div>
-          <AddExpenseForm :project-id="pid" @success="onExpenseCreated" @cancel="closeAddExpense" />
-        </div>
+          <!-- Show unit price if there's exactly 1 line -->
+          <td class="px-3 py-2 text-right">
+            <span v-if="(e.lines?.length || 0) === 1">
+              {{ formatUsd(e.lines[0].unit_price_usd) }}
+            </span>
+            <span v-else>—</span>
+          </td>
+
+          <!-- Show subtotal = Σ(qty × unit_price) -->
+          <td class="px-3 py-2 text-right">
+            {{ formatUsd(expenseSubtotal(e)) }}
+          </td>
+                    <!-- debug -->
+          <td colspan="6" class="text-xs text-gray-500">
+            {{ e.lines?.map(l => `qty=${l.quantity}, up=${l.unit_price_usd}`) }}
+          </td>
+        </tr>
+
+        <tr v-if="!expensesForProject.length">
+          <td colspan="6" class="px-3 py-4 text-gray-500">No expenses yet.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+
+
+  <!-- Add Expense Modal -->
+  <div
+    v-if="showAddExpense"
+    class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4"
+  >
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold">Add Expense</h3>
+        <button class="text-sm underline" @click="closeAddExpense">Close</button>
       </div>
+      <AddExpenseForm
+        :project-id="pid"
+        @success="onExpenseCreated"
+        @cancel="closeAddExpense"
+      />
     </div>
+  </div>
+</div>
+
 
     <!-- Tasks -->
     <div v-else-if="activeTab === 'tasks'">
@@ -220,6 +252,49 @@ function hydrateForm() {
 }
 function resetForm() { hydrateForm() }
 
+// Safe numeric parser: handles '', null, '$1,234.50'
+function toNumber(v) {
+  if (v == null) return 0
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+  if (typeof v === 'string') {
+    const n = Number(v.replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(n) ? n : 0
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatUsd(v) {
+  const n = toNumber(v)
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—'
+}
+
+function lineQty(ln) {
+  return toNumber(ln?.quantity ?? ln?.qty ?? 1)
+}
+
+function lineUnit(ln) {
+  const up = ln?.unit_price_usd ?? ln?.unit_price ?? ln?.price_usd ?? ln?.price ?? 0
+  return toNumber(up)
+}
+
+function lineTotal(ln) {
+  const pre = toNumber(ln?.line_total_usd ?? ln?.total_usd ?? ln?.total)
+  if (pre > 0) return pre
+  return lineQty(ln) * lineUnit(ln)
+}
+
+function expenseSubtotal(expense) {
+  const lines = Array.isArray(expense?.lines) ? expense.lines : []
+  return lines.reduce((sum, l) => sum + lineTotal(l), 0)
+}
+
+function truncateNote(note) {
+  if (!note) return '—'
+  const words = String(note).trim().split(/\s+/)
+  return words.length > 100 ? words.slice(0, 100).join(' ') + '…' : note
+}
+
 async function saveEdits() {
   error.value = null
   saving.value = true
@@ -255,11 +330,7 @@ async function onExpenseCreated() {
 
 // --- Progress sync from Kanban (robust to different shapes)
 const localProgress = ref(null)
-/**
- * Kanban emits either:
- *  - a full progress object from the store: { percent, totals, by_status, suggestion }
- *  - or a shape with counts: { percent, counts: { total, done }, suggestion }
- */
+
 async function onProgress(progressObj) {
   if (!progressObj || typeof progressObj !== 'object') return
 
@@ -284,7 +355,6 @@ async function onProgress(progressObj) {
   const patch = {}
   if (project.value && project.value.progress_percent !== percent) patch.progress_percent = percent
   if (project.value && desired && project.value.status !== desired) patch.status = desired
-
   if (Object.keys(patch).length) {
     try {
       const updated = await api.patch(`/projects/${pid}`, patch)
@@ -292,26 +362,23 @@ async function onProgress(progressObj) {
       if (idx !== -1) projects.items[idx] = { ...projects.items[idx], ...updated }
     } catch { /* non-fatal */ }
   }
-
   if (desired === 'completed' && project.value?.status !== 'completed' && total > 0 && done === total) {
     if (confirm('All tasks are complete. Mark the project as Completed?')) {
       try {
         const updated = await api.patch(`/projects/${pid}`, { status: 'completed', progress_percent: 100 })
         const idx = projects.items.findIndex(p => p.id === pid)
         if (idx !== -1) projects.items[idx] = { ...projects.items[idx], ...updated }
-      } catch {}
+      } catch {/* non-fatal */ }
     }
   }
 }
 
 // --- Boot
 onMounted(async () => {
-  if (!clients.items.length) { try { await clients.fetchAll() } catch {} }
-  if (!project.value) { try { await projects.fetchOne(pid) } catch {} }
+  if (!clients.items.length) { try { await clients.fetchAll() } catch {/* */} }
+  if (!project.value) { try { await projects.fetchOne(pid) } catch {/* */} }
   hydrateForm()
-
   await exp.fetchExpenses(pid)
-
   // Back-compat: auto-open Add Expense modal if asked
   if (normalizeTab(route.query.tab) === 'expenses' && route.query.open === 'add') {
     showAddExpense.value = true
