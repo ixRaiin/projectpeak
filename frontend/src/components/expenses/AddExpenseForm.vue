@@ -32,11 +32,19 @@
         <button type="button" class="text-sm underline" @click="addLine">Add line</button>
       </div>
 
-      <div v-for="(ln, idx) in form.lines" :key="ln.key" class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border rounded p-3">
+      <div
+        v-for="(ln, idx) in form.lines"
+        :key="ln.key"
+        class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border rounded p-3"
+      >
         <!-- Category -->
         <label class="block md:col-span-3">
           <span class="text-sm text-gray-600">Category *</span>
-          <select v-model.number="ln.category_id" class="w-full border rounded p-2" @change="onCategoryChange(idx)">
+          <select
+            v-model.number="ln.category_id"
+            class="w-full border rounded p-2"
+            @change="onCategoryChange(idx)"
+          >
             <option :value="null" disabled>Select category…</option>
             <option v-for="c in catalog.categories" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
@@ -67,22 +75,27 @@
           <p v-if="lineErr[idx]?.quantity" class="text-xs text-red-600 mt-1">{{ lineErr[idx].quantity }}</p>
         </label>
 
-        <!-- Unit Price -->
+        <!-- Unit Price (read‑only) -->
         <label class="block md:col-span-2">
           <span class="text-sm text-gray-600">Unit Price</span>
-          <input v-model.number="ln.unit_price_usd" type="number" step="0.0001" class="w-full border rounded p-2" />
-          <p class="text-[11px] text-gray-500 mt-1" v-if="ln._prefilled">
-            Prefilled from component; you can override.
-          </p>
+          <div class="w-full border rounded p-2 bg-gray-50 text-gray-800">
+            <span v-if="isFiniteNumber(ln.unit_price_usd)">
+              ${{ Number(ln.unit_price_usd).toFixed(2) }}
+            </span>
+            <span v-else class="text-gray-400">—</span>
+          </div>
+          <!-- <p class="text-[11px] text-gray-500 mt-1" v-if="ln._prefilled">
+            Prefilled from component default.
+          </p> -->
         </label>
 
         <!-- Line total + remove -->
-        <div class="md:col-span-1 flex items-center justify-between md:justify-end gap-3">
+        <!-- <div class="md:col-span-1 flex items-center justify-between md:justify-end gap-3">
           <div class="text-sm text-gray-700 font-medium whitespace-nowrap">
             ${{ lineTotal(ln).toFixed(2) }}
           </div>
           <button type="button" class="text-red-600 text-sm underline" @click="removeLine(idx)">Remove</button>
-        </div>
+        </div> -->
       </div>
 
       <p v-if="fieldErr.lines" class="text-xs text-red-600">{{ fieldErr.lines }}</p>
@@ -130,13 +143,16 @@ const fieldErr = ref({})
 const lineErr = ref([])
 
 const form = ref({
-  expense_date: '',     // 'YYYY-MM-DD'
+  expense_date: '',
   vendor: '',
   reference_no: '',
   note: '',
-  lines: [],            // { key, category_id, component_id, quantity, unit_price_usd, _prefilled? }
+  lines: [],
 })
 
+const isFiniteNumber = (v) => Number.isFinite(Number(v))
+
+/* -------- line helpers -------- */
 function addLine() {
   form.value.lines.push({
     key: cryptoRandom(),
@@ -153,31 +169,43 @@ function removeLine(idx) {
 
 function filteredComponents(categoryId) {
   if (!categoryId) return []
-  return catalog.components.filter(c => c.category_id === Number(categoryId))
+  // Components are loaded per category into catalog.components
+  return catalog.components.filter(c => Number(c.category_id) === Number(categoryId))
 }
 
 function onCategoryChange(idx) {
   const ln = form.value.lines[idx]
   if (!ln) return
-  // Reset component + unit price when category changes
   ln.component_id = null
   ln.unit_price_usd = ''
   ln._prefilled = false
-  // Fetch comps for this category if not already loaded
-  catalog.fetchComponents?.({ category_id: ln.category_id }).catch(() => {})
+  // Load components for the selected category (same pattern as Catalog.vue)
+  if (ln.category_id) {
+    catalog.fetchComponents({ category_id: ln.category_id }).catch(() => {})
+  } else {
+    // clear if deselected
+    // (optional) catalog.components = []
+  }
 }
 
 function onComponentChange(idx) {
   const ln = form.value.lines[idx]
   if (!ln || !ln.component_id) return
-  const cmp = catalog.components.find(c => c.id === Number(ln.component_id))
-  if (cmp && (cmp.unit_price_usd != null || cmp.price_usd != null)) {
-    const price = Number(cmp.unit_price_usd ?? cmp.price_usd)
-    if (Number.isFinite(price)) {
-      ln.unit_price_usd = price
+  // Look up in the currently loaded component list for this category
+  const cmp = catalog.components.find(c => Number(c.id) === Number(ln.component_id))
+  if (cmp) {
+    // Prefer default_unit_price_usd; fall back to unit_price_usd if present
+    const price = cmp.default_unit_price_usd ?? cmp.unit_price_usd
+    if (price != null && Number.isFinite(Number(price))) {
+      ln.unit_price_usd = Number(price)
       ln._prefilled = true
     }
   }
+}
+
+function onUnitPriceInput(idx) {
+  const ln = form.value.lines[idx]
+  if (ln) ln._prefilled = false
 }
 
 function lineTotal(ln) {
@@ -188,6 +216,7 @@ function lineTotal(ln) {
 
 const subtotal = computed(() => form.value.lines.reduce((s, l) => s + lineTotal(l), 0))
 
+/* -------- validation & submit -------- */
 function validate() {
   fieldErr.value = {}
   lineErr.value = []
@@ -217,12 +246,11 @@ async function submit() {
     submitting.value = true
     const pid = Number(props.projectId)
 
-    // Build payload
     const payload = {
       expense_date: form.value.expense_date,
       vendor: form.value.vendor,
       reference_no: form.value.reference_no || undefined,
-      note: form.value.note || undefined,
+      memo: form.value.note || undefined, // maps to your API's 'memo'
       lines: form.value.lines.map(l => ({
         category_id: Number(l.category_id),
         component_id: Number(l.component_id),
@@ -234,7 +262,7 @@ async function submit() {
     const created = await expenses.createExpense(pid, payload)
     emit('success', created)
 
-    // reset form for next add
+    // reset for next use
     form.value = { expense_date: '', vendor: '', reference_no: '', note: '', lines: [] }
     addLine()
   } catch (e) {
@@ -244,6 +272,7 @@ async function submit() {
   }
 }
 
+/* -------- boot -------- */
 function cryptoRandom() {
   if (window.crypto?.getRandomValues) {
     const a = new Uint32Array(1)
@@ -254,11 +283,11 @@ function cryptoRandom() {
 }
 
 onMounted(async () => {
-  // Ensure catalogs are loaded
-  if (!catalog.categories?.length && catalog.fetchCategories) {
-    try { await catalog.fetchCategories() } catch {/* ignore errors */}
+  // Load categories once (same pattern as your Catalog.vue)
+  if (!catalog.categories.length) {
+    try { await catalog.fetchCategories({}) } catch {/* ignore errors */ }
   }
-  // If you keep components paged-by-category, they’ll be fetched on-demand in onCategoryChange
+  // Components are fetched on demand per selected category
   if (!form.value.lines.length) addLine()
 })
 </script>

@@ -2,14 +2,49 @@
 import { defineStore } from 'pinia'
 import api from '@/lib/api'
 
+// --- helpers (internal only) ---
+function asArray(x) {
+  if (Array.isArray(x)) return x
+  if (x && Array.isArray(x.expenses)) return x.expenses
+  if (x && Array.isArray(x.items)) return x.items
+  if (x && Array.isArray(x.rows)) return x.rows
+  if (x && Array.isArray(x.data)) return x.data
+  return []
+}
+const sortByDateDesc = (a, b) =>
+  String(b?.expense_date || '').localeCompare(String(a?.expense_date || ''))
+
+function normalizeLine(input = {}) {
+  // Accept qty or quantity; coerce numbers; allow fallback from component_unit_price
+  const quantity = Number(
+    input.quantity != null ? input.quantity : (input.qty != null ? input.qty : 1)
+  )
+  const unit_price_usd_raw =
+    input.unit_price_usd != null && input.unit_price_usd !== ''
+      ? input.unit_price_usd
+      : (input.component_unit_price != null ? input.component_unit_price : 0)
+
+  const unit_price_usd = Number(unit_price_usd_raw)
+
+  const out = {
+    category_id: Number(input.category_id),
+    component_id: input.component_id != null ? Number(input.component_id) : undefined,
+    quantity: Number.isFinite(quantity) ? quantity : 1,
+    unit_price_usd: Number.isFinite(unit_price_usd) ? unit_price_usd : 0,
+  }
+
+  if (out.component_id === undefined) delete out.component_id
+  return out
+}
+
 export const useExpensesStore = defineStore('expenses', {
   state: () => ({
-    byProject: {},                        // { [pid]: Expense[] }
+    byProject: {},
     loading: { expenses: false },
     errors: {
-      expenses: null,                     // fetch list errors
-      mutateById: {},                     // { [eid]: string|null } header errors
-      lineByKey: {},                      // { [`${eid}:${lid||'new'}`]: string|null } line errors
+      expenses: null,
+      mutateById: {},
+      lineByKey: {},
     },
   }),
 
@@ -20,8 +55,7 @@ export const useExpensesStore = defineStore('expenses', {
       this.errors.expenses = null
       try {
         const res = await api.get(`/projects/${pid}/expenses`)
-        let list = Array.isArray(res?.expenses) ? res.expenses : []
-        list = list.slice().sort((a, b) => String(b.expense_date).localeCompare(String(a.expense_date)))
+        const list = asArray(res).slice().sort(sortByDateDesc)
         this.byProject[pid] = list
         return list
       } catch (e) {
@@ -33,13 +67,26 @@ export const useExpensesStore = defineStore('expenses', {
       }
     },
 
-    // ---- Header mutations (Step 5) ----
+    // ---- Header mutations ----
     async createExpense(pid, payload) {
       try {
-        const created = await api.post(`/projects/${pid}/expenses`, payload)
+        const body = { ...payload }
+
+        // Normalize optional lines if caller sent them in the header create
+        if (Array.isArray(body.lines)) {
+          body.lines = body.lines.map(normalizeLine)
+        }
+
+        // Ensure expense_date is a string (YYYY-MM-DD) if provided
+        if (body.expense_date instanceof Date) {
+          const d = body.expense_date
+          body.expense_date = d.toISOString().slice(0, 10)
+        }
+
+        const created = await api.post(`/projects/${pid}/expenses`, body)
         if (!this.byProject[pid]) this.byProject[pid] = []
         this.byProject[pid].unshift(created)
-        this.byProject[pid].sort((a, b) => String(b.expense_date).localeCompare(String(a.expense_date)))
+        this.byProject[pid].sort(sortByDateDesc)
         return created
       } catch (e) {
         this.errors.mutateById['new'] = e?.message || 'Failed to create expense'
@@ -54,9 +101,15 @@ export const useExpensesStore = defineStore('expenses', {
       if (idx !== -1) list[idx] = { ...list[idx], ...patch }
 
       try {
-        const updated = await api.patch(`/projects/${pid}/expenses/${eid}`, patch)
+        const normalized = { ...patch }
+        if (normalized.expense_date instanceof Date) {
+          const d = normalized.expense_date
+          normalized.expense_date = d.toISOString().slice(0, 10)
+        }
+
+        const updated = await api.patch(`/projects/${pid}/expenses/${eid}`, normalized)
         if (idx !== -1) list[idx] = updated
-        this.byProject[pid] = list.slice().sort((a, b) => String(b.expense_date).localeCompare(String(a.expense_date)))
+        this.byProject[pid] = list.slice().sort(sortByDateDesc)
         this.errors.mutateById[eid] = null
         return updated
       } catch (e) {
@@ -66,13 +119,14 @@ export const useExpensesStore = defineStore('expenses', {
       }
     },
 
-    // ---- Lines (Step 6) ----
+    // ---- Lines ----
     async addLine(pid, eid, payload) {
-      // payload: { category_id, qty|quantity, unit_price_usd }
+      // payload: { category_id, component_id, qty|quantity, unit_price_usd, component_unit_price? }
       const key = `${eid}:new`
       this.errors.lineByKey[key] = null
       try {
-        await api.post(`/projects/${pid}/expenses/${eid}/lines`, payload)
+        const body = normalizeLine(payload)
+        await api.post(`/projects/${pid}/expenses/${eid}/lines`, body)
         // Always refetch to stay in sync and get server-calculated totals if any
         await this.fetchExpenses(pid)
         return true
@@ -86,7 +140,8 @@ export const useExpensesStore = defineStore('expenses', {
       const key = `${eid}:${lid}`
       this.errors.lineByKey[key] = null
       try {
-        await api.patch(`/projects/${pid}/expenses/${eid}/lines/${lid}`, patch)
+        const body = normalizeLine({ ...patch, quantity: patch.quantity ?? patch.qty })
+        await api.patch(`/projects/${pid}/expenses/${eid}/lines/${lid}`, body)
         await this.fetchExpenses(pid)
         return true
       } catch (e) {

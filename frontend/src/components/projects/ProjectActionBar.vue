@@ -21,7 +21,7 @@ aria-label="Search projects"
 
 
 <div class="flex items-center gap-2">
-<select v-model="status" @change="$emit('filter', status)" class="border rounded px-2 py-2">
+<select v-model="status" @change="$emit('filter', status)" class="border rounded px-2 py-3">
 <option value="all">All statuses</option>
 <option value="planned">Planned</option>
 <option value="active">Active</option>
@@ -29,7 +29,7 @@ aria-label="Search projects"
 </select>
 
 
-<select v-model="sort" @change="$emit('sort', sort)" class="border rounded px-2 py-2">
+<select v-model="sort" @change="$emit('sort', sort)" class="border rounded px-2 py-3">
 <option value="updated_desc">Updated (newest)</option>
 <option value="updated_asc">Updated (oldest)</option>
 <option value="name_asc">Name (A→Z)</option>

@@ -14,9 +14,7 @@
 <span v-if="p.end_date"> → {{ p.end_date }}</span>
 </div>
 <div class="flex flex-wrap gap-2 pt-1">
-  <button class="underline" @click="$emit('edit', p)">Edit Project Details</button>
-  <button class="underline" @click="$emit('tasks', p)">Display All Tasks</button>
-  <button class="underline" @click="$emit('expenses', p)">Add Expenses & Vendors</button>
+  <button class="underline" @click="$emit('edit', p)">Edit</button>
   <button class="text-red-600 underline" @click="$emit('delete', p)">Delete</button>
 </div>
 </article>

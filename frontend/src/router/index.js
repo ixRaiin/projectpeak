@@ -3,7 +3,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
-import AddProjectView from '@/views/AddProjectView.vue'
 
 const HomeView = () => import('@/views/HomeView.vue')
 const ProjectsView = () => import('@/views/ProjectsView.vue')

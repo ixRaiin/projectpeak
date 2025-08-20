@@ -16,12 +16,9 @@ async function getAuthToken() {
 
 async function request(method, path, data) {
   const token = await getAuthToken()
-
-  // Build headers
   const headers = {}
   if (data) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
-
   const res = await fetch(`${API_PREFIX}${path}`, {
     method,
     headers,
@@ -65,4 +62,5 @@ const api = {
 }
 
 export const apiClient = () => api
+export { api }
 export default api
