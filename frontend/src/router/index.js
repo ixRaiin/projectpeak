@@ -14,11 +14,11 @@ const ProjectDetailView = () => import('@/views/ProjectDetailView.vue')
 const ProjectAddView = () => import('@/views/AddProjectView.vue')
 
 const routes = [
-  // Auth (guest-only) — mark with layout:'auth' so chrome is hidden
+  // Auth (guest-only)
   { path: '/login',    name: 'login',    component: LoginView,    meta: { guestOnly: true, layout: 'auth' } },
   { path: '/register', name: 'register', component: RegisterView, meta: { guestOnly: true, layout: 'auth' } },
 
-  // App (protected)
+  // App (auth required)
   { path: '/',                name: 'home',            component: HomeView,          meta: { requiresAuth: true } },
   { path: '/projects',        name: 'projects',        component: ProjectsView,      meta: { requiresAuth: true } },
   { path: '/projects/new',    name: 'project-new',     component: ProjectAddView,    meta: { requiresAuth: true } },
@@ -35,8 +35,6 @@ const router = createRouter({ history: createWebHistory(), routes })
 
 router.beforeEach(async (to) => {
   const auth = useAuth()
-
-  // Consider either a loaded user OR a stored token as "maybe authed"
   const token = auth.token || localStorage.getItem('token') || null
   const hasUser = !!auth.user
   const isAuthed = hasUser || !!token
@@ -45,20 +43,16 @@ router.beforeEach(async (to) => {
   if (!hasUser && token && !auth.loading) {
     try { await auth.fetchMe() } catch {/* ignore */ }
   }
-
   // Final check after possible fetch
   const authedNow = !!useAuth().user || !!token
-
   // Block protected routes
   if (to.meta.requiresAuth && !authedNow) {
     return { name: 'login', query: { redirect: to.fullPath }, replace: true }
   }
-
   // Prevent reaching /login or /register when already authed
   if (to.meta.guestOnly && authedNow) {
     return { name: 'home', replace: true }
   }
-
   return true
 })
 
