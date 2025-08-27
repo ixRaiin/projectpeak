@@ -35,7 +35,7 @@
           {{ userLabel }}
         </div>
         <button
-          @click="doLogout"
+          @click="onLogout"
           class="flex items-center gap-2 px-3 py-2 w-full rounded-[--radius-sm] hover:bg-white/10 focus-visible:outline-none text-white/90"
         >
           <LogOut class="w-5 h-5" />
@@ -47,10 +47,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { computed } from 'vue'
+import { useRoute, RouterLink, useRouter } from 'vue-router'
 import { useAuth } from '@/stores/auth'
-import { h } from 'vue'
 import { Home, Folder, Users, Package, LogOut } from 'lucide-vue-next'
 
 defineEmits(['navigate'])
@@ -60,9 +59,9 @@ const router = useRouter()
 const auth = useAuth()
 
 const baseItems = [
-  { to: '/',        iconComponent: Home,    label: 'Home' },
-  { to: '/projects', iconComponent: Folder, label: 'Projects' },
-  { to: '/clients',  iconComponent: Users,  label: 'Clients' },
+  { to: '/',         iconComponent: Home,    label: 'Home' },
+  { to: '/projects', iconComponent: Folder,  label: 'Projects' },
+  { to: '/clients',  iconComponent: Users,   label: 'Clients' },
   { to: '/catalog',  iconComponent: Package, label: 'Catalog' },
 ]
 
@@ -75,13 +74,8 @@ function linkClass(path) {
 
 const userLabel = computed(() => auth?.user?.name || auth?.user?.email || 'Signed in')
 
-onMounted(() => {
-  const hasToken = !!auth?.token || !!localStorage.getItem('token')
-  if (!hasToken) router.replace('/login')
-})
-
 async function onLogout() {
-  try { await auth.logout() } catch {/* handle error if needed */ }
+  try { await auth.logout() } catch {/* ignore */}
   router.replace('/login')
 }
 </script>
