@@ -12,16 +12,39 @@ const loading = ref(true)
 const errorMsg = ref('')
 const projects = ref([])
 
+// ---- Clients cache (id -> name) ----
+const clientsObj = reactive({})
+const clientsLoading = ref(false)
+const clientsError = ref('')
+
+async function loadClients() {
+  clientsLoading.value = true
+  clientsError.value = ''
+  try {
+    const res = await api.get('/clients')
+    const list = Array.isArray(res) ? res : (res.clients || [])
+    list.forEach(c => { if (c?.id != null) clientsObj[c.id] = c.name || '' })
+  } catch (e) {
+    clientsError.value = 'Failed to load clients.'
+    console.error(e)
+  } finally {
+    clientsLoading.value = false
+  }
+}
+function clientNameOf(p) {
+  return (p?.client_name) || (p?.client_id != null ? clientsObj[p.client_id] : '') || '—'
+}
+
 // Filters
 const q = ref('')
 const status = ref('all')
 const client = ref('all')
 
 // Caches
-const summaryById = reactive(new Map())   // pid -> { planned, actual, variance }
-const progressById = reactive(new Map())  // pid -> { percent, counts }
+const progressById = reactive(new Map())     // pid -> { percent, counts }
+const expensesTotalById = reactive(new Map()) // pid -> number (Σ expense totals)
 
-// Concurrency control for background fetches
+// Concurrency control
 const MAX_CONCURRENT = 4
 const queue = []
 let active = 0
@@ -44,26 +67,6 @@ async function loadProjects() {
   }
 }
 
-const summaryPromises = new Map()
-function fetchSummary(pid) {
-  if (summaryById.has(pid)) return Promise.resolve(summaryById.get(pid))
-  if (summaryPromises.has(pid)) return summaryPromises.get(pid)
-  const p = api.get(`/projects/${pid}/summary`)
-    .then((res) => {
-      const data = {
-        planned: Number(res?.totals?.planned || 0),
-        actual: Number(res?.totals?.actual || 0),
-        variance: Number(res?.totals?.variance || 0),
-      }
-      summaryById.set(pid, data)
-      return data
-    })
-    .catch((e) => { console.error('summary error', pid, e); return { planned:0, actual:0, variance:0 } })
-    .finally(() => summaryPromises.delete(pid))
-  summaryPromises.set(pid, p)
-  return p
-}
-
 const progressPromises = new Map()
 function fetchProgress(pid) {
   if (progressById.has(pid)) return Promise.resolve(progressById.get(pid))
@@ -83,29 +86,87 @@ function fetchProgress(pid) {
   return p
 }
 
+/** ---------- Expense math (from your reference) ---------- */
+// Safe numeric parser
+function toNumber(v) {
+  if (v == null) return 0
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+  if (typeof v === 'string') {
+    const n = Number(v.replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(n) ? n : 0
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+function lineQty(ln) {
+  return toNumber(ln?.quantity ?? ln?.qty ?? 1)
+}
+function lineUnit(ln) {
+  const up = ln?.unit_price_usd ?? ln?.unit_price ?? ln?.price_usd ?? ln?.price ?? 0
+  return toNumber(up)
+}
+function lineTotal(ln) {
+  const pre = toNumber(ln?.line_total_usd ?? ln?.total_usd ?? ln?.total)
+  if (pre > 0) return pre
+  return lineQty(ln) * lineUnit(ln)
+}
+function expenseSubtotal(expense) {
+  const lines = Array.isArray(expense?.lines) ? expense.lines : []
+  return lines.reduce((sum, l) => sum + lineTotal(l), 0)
+}
+function expenseGrandTotal(expense) {
+  // Prefer header totals if present; otherwise subtotal (+ tax if available)
+  const headerTotal = toNumber(expense?.total_usd ?? expense?.total)
+  if (headerTotal > 0) return headerTotal
+  const sub = expenseSubtotal(expense)
+  const tax = toNumber(expense?.tax_usd ?? expense?.tax)
+  return sub + tax
+}
+
+/** Fetch Σ totals for a project using the above logic */
+const expensesPromises = new Map()
+function fetchExpensesTotal(pid) {
+  if (expensesTotalById.has(pid)) return Promise.resolve(expensesTotalById.get(pid))
+  if (expensesPromises.has(pid)) return expensesPromises.get(pid)
+  const p = api.get(`/projects/${pid}/expenses`)
+    .then((res) => {
+      const list = Array.isArray(res) ? res : (res.expenses || res.items || [])
+      const sum = list.reduce((acc, e) => acc + expenseGrandTotal(e), 0)
+      expensesTotalById.set(pid, sum)
+      return sum
+    })
+    .catch((e) => { console.error('expenses error', pid, e); expensesTotalById.set(pid, 0); return 0 })
+    .finally(() => expensesPromises.delete(pid))
+  expensesPromises.set(pid, p)
+  return p
+}
+
 // ---------- Derived ----------
 const statuses = computed(() => ['all', ...new Set(projects.value.map(p => p.status).filter(Boolean)) ])
-const clients  = computed(() => ['all', ...new Set(projects.value.map(p => p.client_name).filter(Boolean)) ])
+const clientsList  = computed(() => ['all', ...new Set(projects.value.map(p => clientNameOf(p)).filter(Boolean)) ])
 
-// Show ONLY 5 rows
 const PAGE_SIZE = 5
-
 const filtered = computed(() => {
   const k = q.value.trim().toLowerCase()
   return projects.value.filter(p => {
-    const matchesQ = !k || (p.code||'').toLowerCase().includes(k) || (p.name||'').toLowerCase().includes(k) || (p.client_name||'').toLowerCase().includes(k)
+    const nameClient = clientNameOf(p)
+    const matchesQ =
+      !k ||
+      (p.code || '').toLowerCase().includes(k) ||
+      (p.name || '').toLowerCase().includes(k) ||
+      (nameClient || '').toLowerCase().includes(k)
+
     const matchesStatus = status.value === 'all' || p.status === status.value
-    const matchesClient = client.value === 'all' || p.client_name === client.value
+    const matchesClient = client.value === 'all' || nameClient === client.value
     return matchesQ && matchesStatus && matchesClient
   })
 })
-
 const visible = computed(() => filtered.value.slice(0, PAGE_SIZE))
 
 watch(visible, (rows) => {
   rows.forEach(p => {
-    run(() => fetchSummary(p.id))
     run(() => fetchProgress(p.id))
+    run(() => fetchExpensesTotal(p.id)) // use reference math
   })
 }, { immediate: true })
 
@@ -117,15 +178,15 @@ const kpiAvgProgress = computed(() => {
   const vals = projects.value.map(p => progressById.get(p.id)?.percent).filter(v => typeof v === 'number')
   return vals.length ? vals.reduce((a,b)=>a+b,0) / vals.length : 0
 })
-const kpiTotalActual = computed(() => {
-  let t = 0; projects.value.forEach(p => { t += Number(summaryById.get(p.id)?.actual || 0) }); return t
+const kpiTotalExpenses = computed(() => {
+  let t = 0; projects.value.forEach(p => { t += Number(expensesTotalById.get(p.id) || 0) }); return t
 })
 
 // Formatters
 const fmtCurrency = (n) => new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(Number(n||0))
 const fmtPercent  = (n) => `${Math.round(Number(n||0))}%`
 
-// Status → badge class (planned=amber, active=green, completed=neutral)
+// Status → badge
 function statusClass(status) {
   const s = String(status || '').toLowerCase()
   if (s === 'active') return 'badge-success'
@@ -134,7 +195,7 @@ function statusClass(status) {
   return 'badge-neutral'
 }
 
-// Progress percent → color class (<=33 amber, 34–66 navy, >=67 green)
+// Progress color
 function progressClass(pct) {
   const n = Number(pct || 0)
   if (n >= 67) return 'progress-green'
@@ -142,7 +203,9 @@ function progressClass(pct) {
   return 'progress-amber'
 }
 
-onMounted(loadProjects)
+onMounted(async () => {
+  await Promise.all([loadProjects(), loadClients()])
+})
 </script>
 
 <template>
@@ -154,8 +217,10 @@ onMounted(loadProjects)
     </header>
 
     <!-- Error -->
-    <div v-if="errorMsg" class="section bg-[--color-error]/5 border-[--color-error]">
-      <div class="text-[--color-error] text-sm">{{ errorMsg }}</div>
+    <div v-if="errorMsg || clientsError" class="section bg-[--color-error]/5 border-[--color-error]">
+      <div class="text-[--color-error] text-sm">
+        {{ errorMsg || clientsError }}
+      </div>
     </div>
 
     <!-- KPIs -->
@@ -173,12 +238,12 @@ onMounted(loadProjects)
         <div class="help">Updates as project progress is fetched</div>
       </div>
       <div class="section">
-        <div class="muted mb-1">Total Actual Spend</div>
+        <div class="muted mb-1">Total Expenses</div>
         <div class="text-3xl font-semibold">
           <span v-if="loading">—</span>
-          <span v-else>{{ fmtCurrency(kpiTotalActual) }}</span>
+          <span v-else>{{ fmtCurrency(kpiTotalExpenses) }}</span>
         </div>
-        <div class="help">Aggregated from project summaries</div>
+        <div class="help">Σ of all project expenses</div>
       </div>
     </div>
 
@@ -201,7 +266,7 @@ onMounted(loadProjects)
           <div>
             <label class="label">Client</label>
             <select class="field" v-model="client">
-              <option v-for="c in clients" :key="c" :value="c">{{ c }}</option>
+              <option v-for="c in clientsList" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
         </div>
@@ -214,7 +279,7 @@ onMounted(loadProjects)
                   <th class="text-left font-medium px-4 py-2">Code</th>
                   <th class="text-left font-medium px-4 py-2">Project</th>
                   <th class="text-left font-medium px-4 py-2">Client</th>
-                  <th class="text-right font-medium px-4 py-2">Actual</th>
+                  <th class="text-right font-medium px-4 py-2">Total</th>
                   <th class="text-right font-medium px-4 py-2 w-44">Progress</th>
                 </tr>
               </thead>
@@ -249,12 +314,12 @@ onMounted(loadProjects)
                   </td>
 
                   <td class="px-4 py-2 whitespace-nowrap truncate">
-                    {{ p.client_name || '—' }}
+                    {{ clientNameOf(p) }}
                   </td>
 
                   <td class="px-4 py-2 text-right whitespace-nowrap">
-                    <template v-if="summaryById.get(p.id)">
-                      {{ fmtCurrency(summaryById.get(p.id).actual) }}
+                    <template v-if="expensesTotalById.get(p.id) != null">
+                      {{ fmtCurrency(expensesTotalById.get(p.id)) }}
                     </template>
                     <template v-else>
                       <span class="skeleton h-4 w-20 inline-block"></span>
@@ -265,7 +330,7 @@ onMounted(loadProjects)
                     <div class="flex items-center justify-end gap-2">
                       <div class="w-28 h-1.5 bg-black/10 rounded-full overflow-hidden">
                         <div
-                          class="h-full rounded-full transition-all"
+                          class="h-full rounded-full transition-[width,background] duration-300"
                           :class="progressClass(progressById.get(p.id)?.percent)"
                           :style="{ width: (progressById.get(p.id)?.percent || 0) + '%' }"
                         />
@@ -298,17 +363,17 @@ onMounted(loadProjects)
         </div>
       </section>
 
-      <!-- Finance Tracker (unchanged) -->
+      <!-- Finance Tracker -->
       <section class="section">
         <div class="mb-3">
           <div class="heading">Finance Tracker</div>
-          <p class="muted mt-1">Rolling total of Actual across projects.</p>
+          <p class="muted mt-1">Sum of all expense totals per project.</p>
         </div>
 
         <div class="grid gap-2">
           <div class="flex items-center justify-between">
-            <span class="subtext">Total Actual (loaded)</span>
-            <span class="font-semibold">{{ fmtCurrency(kpiTotalActual) }}</span>
+            <span class="subtext">Total (loaded)</span>
+            <span class="font-semibold">{{ fmtCurrency(kpiTotalExpenses) }}</span>
           </div>
 
           <div class="divider my-2"></div>
@@ -316,7 +381,7 @@ onMounted(loadProjects)
           <div class="subtext mb-1">Visible Projects</div>
           <div v-for="p in visible" :key="p.id" class="flex items-center justify-between py-1">
             <span class="truncate">{{ p.code }} · {{ p.name }}</span>
-            <span v-if="summaryById.get(p.id)">{{ fmtCurrency(summaryById.get(p.id).actual) }}</span>
+            <span v-if="expensesTotalById.get(p.id) != null">{{ fmtCurrency(expensesTotalById.get(p.id)) }}</span>
             <span v-else class="skeleton h-4 w-16"></span>
           </div>
         </div>
@@ -325,9 +390,16 @@ onMounted(loadProjects)
 
         <div>
           <div class="heading text-base">Recent Activity</div>
-          <p class="muted mt-1">Coming soon — we’ll surface latest expenses & completed tasks.</p>
+          <p class="muted mt-1">Coming soon — latest expenses & completed tasks.</p>
         </div>
       </section>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Progress colors */
+.progress-green { background: linear-gradient(90deg, rgba(16,185,129,0.85), rgba(16,185,129,1)); }
+.progress-navy  { background: linear-gradient(90deg, rgba(30,58,138,0.85), rgba(30,58,138,1)); }
+.progress-amber { background: linear-gradient(90deg, rgba(245,158,11,0.85), rgba(245,158,11,1)); }
+</style>

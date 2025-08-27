@@ -143,10 +143,6 @@
           <td class="px-3 py-2 text-right">
             {{ formatUsd(expenseSubtotal(e)) }}
           </td>
-                    <!-- debug -->
-          <td colspan="6" class="text-xs text-gray-500">
-            {{ e.lines?.map(l => `qty=${l.quantity}, up=${l.unit_price_usd}`) }}
-          </td>
         </tr>
 
         <tr v-if="!expensesForProject.length">
