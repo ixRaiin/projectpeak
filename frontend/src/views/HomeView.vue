@@ -245,9 +245,6 @@ const kpiGrossProfit = computed(() => kpiTotalBudget.value - kpiTotalExpenses.va
 // Net Profit (adjust later if you add overheads/fees)
 const kpiNetProfit = computed(() => kpiGrossProfit.value)
 
-// Loss as positive number when net < 0
-const kpiLoss = computed(() => Math.max(0, -kpiNetProfit.value))
-
 // Profit margin vs budget
 const kpiProfitMarginPct = computed(() => {
   const bud = kpiTotalBudget.value
@@ -465,13 +462,6 @@ onMounted(async () => {
               :class="kpiGrossProfit >= 0 ? 'text-[--color-success-strong]' : 'text-[--color-error]'"
             >
               {{ fmtCurrency(kpiGrossProfit) }}
-            </span>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="subtext">Loss</span>
-            <span class="font-semibold text-[--color-error]">
-              {{ fmtCurrency(kpiLoss) }}
             </span>
           </div>
 
