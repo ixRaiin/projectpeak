@@ -3,7 +3,6 @@ import { defineStore } from 'pinia';
 import api from '@/lib/api';
 
 function asArray(x) {
-  // Accept [{...}], {items:[...]}, {rows:[...]}, {data:[...]}, null/undefined
   if (Array.isArray(x)) return x;
   if (x && Array.isArray(x.items)) return x.items;
   if (x && Array.isArray(x.rows)) return x.rows;
@@ -28,13 +27,64 @@ export const useProjects = defineStore('projects', {
       try {
         const q = new URLSearchParams(params).toString();
         const data = await api.get(`/projects${q ? `?${q}` : ''}`);
-        this.items = Array.isArray(data) ? data : (data.projects || []);
+
+        // Accept [], {items:[]}, {rows:[]}, {data:[]}, {projects:[]}
+        let arr = asArray(data);
+        if (!arr.length && data && Array.isArray(data.projects)) arr = data.projects;
+
+        this.items = arr;
       } catch (e) {
-        this.error = e.message;
+        this.error = e?.message || 'Failed to load projects';
+        this.items = [];
       } finally {
         this.loading = false;
       }
     },
+    async fetchTaskProgress(pid) {
+      try {
+        const res = await api.get(`/projects/${pid}/tasks/progress`)
+        return res || null
+      } catch {
+        return null
+      }
+    },
+    async updateStatus(id, status) {
+      const updated = await api.patch(`/projects/${id}`, { status })
+      // reflect locally if exists in list
+      const i = this.items.findIndex(p => p.id === id)
+      if (i !== -1) {
+        this.items[i] = { ...this.items[i], status: updated.status ?? status }
+      }
+      return updated
+    },
+
+    async syncStatusWithTasks(pid, { promptOnComplete = false } = {}) {
+      const progress = await this.fetchTaskProgress(pid)
+      const suggestion = this.suggestStatusFromProgress(progress)
+      const idx = this.items.findIndex(p => p.id === pid)
+      const current = idx !== -1 ? this.items[idx].status : null
+
+      let applied = false
+      if (!suggestion || !idx !== -1) {
+        return { progress, suggestion: suggestion || null, applied }
+      }
+      if (suggestion === 'completed') {
+        if (current !== 'completed' && promptOnComplete) {
+          // keep it the same, adjusted the caller handles that confirm UI;
+          return { progress, suggestion, applied: false }
+        }
+      } else if (suggestion !== current) {
+        await this.updateStatus(pid, suggestion)
+        applied = true
+      }
+      // also stash percent to render progress bar if present
+      if (idx !== -1 && progress && typeof progress.percent === 'number') {
+        this.items[idx] = { ...this.items[idx], progress_percent: progress.percent }
+      }
+
+      return { progress, suggestion, applied }
+    },
+
     async fetchOne(id) {
       this.loading = true; this.error = null;
       try {
@@ -98,6 +148,22 @@ export const useProjects = defineStore('projects', {
 
     async fetchProjectSummary(pid) {
       this.detail.summary = await api.get(`/projects/${pid}/summary`);
+    },
+    suggestStatusFromProgress(progress) {
+      if (!progress) return null
+      const percent = Number(progress.percent ?? 0)
+      const c = progress.counts || {}
+      const todo = Number(c.todo ?? 0)
+      const doing = Number(c.in_progress ?? 0)
+      const done  = Number(c.done ?? 0)
+
+      if (percent >= 100 || (doing === 0 && todo === 0 && done > 0)) return 'completed'
+      if (doing > 0) return 'active'
+      // If there are tasks and all are TODO -> planned
+      if (todo > 0 && doing === 0 && done === 0) return 'planned'
+      // Fallback: if no tasks yet, treat as planned
+      if ((todo + doing + done) === 0) return 'planned'
+      return null
     },
   },
 });

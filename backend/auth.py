@@ -45,14 +45,12 @@ def register():
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
-
     if not name or not email or not password:
         return jsonify(error="name, email, and password are required"), 400
     if len(password) < 8:
         return jsonify(error="password must be at least 8 characters"), 400
     if User.query.filter_by(email=email).first():
         return jsonify(error="email already registered"), 409
-
     user = User(
         name=name,
         email=email,
@@ -62,7 +60,6 @@ def register():
     )
     db.session.add(user)
     db.session.commit()
-
     token = _issue_token(user.id)
     resp = make_response(jsonify(id=user.id, name=user.name, email=user.email))
     resp.set_cookie(
@@ -82,11 +79,9 @@ def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
-
     user = User.query.filter_by(email=email).first()
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify(error="invalid credentials"), 401
-
     token = _issue_token(user.id)
     resp = make_response(jsonify(id=user.id, name=user.name, email=user.email))
     resp.set_cookie(
@@ -127,7 +122,6 @@ def me():
     user = User.query.get(user_id)
     if not user or user.deleted_at is not None:
         return jsonify(user=None)
-
     return jsonify(user={"id": user.id, "name": user.name, "email": user.email})
 
 

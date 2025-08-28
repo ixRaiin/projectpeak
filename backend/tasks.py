@@ -4,13 +4,43 @@ from flask import Blueprint, request, jsonify, abort, g
 from functools import wraps
 from sqlalchemy import func
 from .extensions import db
-from .models import Project, Task
+from .models import Project, Task, TaskComment
 from .auth import _get_token_from_request, _verify_token
 
 bp = Blueprint("tasks", __name__, url_prefix="/api")
+MAX_COMMENT_LEN = 4000
+
+def _extract_user_id(user):
+    # Accepts many shapes: ORM user, dict, tuple like (ok, id), plain int/str
+    if user is None:
+        return None
+    # ORM-like
+    uid = getattr(user, "id", None)
+    if isinstance(uid, int):
+        return uid
+    # dict-like
+    if isinstance(user, dict):
+        for k in ("id", "user_id", "uid"):
+            v = user.get(k)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+    # tuple/list-like: pick the first int inside (handles (True, 2))
+    if isinstance(user, (list, tuple)):
+        for v in user:
+            if isinstance(v, int):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+    # plain str/int
+    if isinstance(user, int):
+        return user
+    if isinstance(user, str) and user.isdigit():
+        return int(user)
+    return None
 
 def auth_required(fn):
-    """Guards a route using your token helpers."""
     @wraps(fn)
     def inner(*args, **kwargs):
         try:
@@ -18,23 +48,30 @@ def auth_required(fn):
             if not token:
                 return jsonify({"error": "UNAUTHORIZED", "detail": "missing token"}), 401
             user = _verify_token(token)
-            if not user:
+            uid = _extract_user_id(user)
+            if uid is None:
                 return jsonify({"error": "UNAUTHORIZED", "detail": "invalid token"}), 401
-            # normalize for downstream use
             g.current_user = user
-            g.user_id = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else user)
+            g.user_id = uid  # <- always an int now
         except Exception as e:
-            # keep this 401 to avoid leaking internals
             return jsonify({"error": "UNAUTHORIZED", "detail": str(e)}), 401
         return fn(*args, **kwargs)
     return inner
 
+# Ensure the project exists or return 404
 def _project_or_404(pid: int) -> Project:
     p = Project.query.get(pid)
     if not p:
         abort(404, description="Project not found")
     return p
 
+def _task_in_project_or_404(pid: int, tid: int) -> Task:
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        abort(404, description="Task not found")
+    return t
+
+# GET
 @bp.route("/projects/<int:pid>/tasks", methods=["GET"])
 @auth_required
 def list_tasks(pid):
@@ -46,6 +83,7 @@ def list_tasks(pid):
     )
     return jsonify({"tasks": [t.to_dict() for t in rows]})
 
+# POST
 @bp.route("/projects/<int:pid>/tasks", methods=["POST"])
 @auth_required
 def create_task(pid):
@@ -75,18 +113,18 @@ def create_task(pid):
     db.session.commit()
     return jsonify(t.to_dict()), 201
 
+# PATCH
 @bp.route("/projects/<int:pid>/tasks/<int:tid>", methods=["PATCH"])
 @auth_required
 def update_task(pid, tid):
-    _project_or_404(pid)
-    t = Task.query.get_or_404(tid)
-    if t.project_id != pid:
-        abort(404)
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        return jsonify({"error": "Task not found"}), 404
     data = request.get_json(silent=True) or {}
     if "title" in data:
         title = (data["title"] or "").strip()
         if not title:
-            abort(400, description="title cannot be empty")
+            return jsonify({"error": "title cannot be empty"}), 400
         t.title = title
     if "description" in data:
         t.description = data["description"] or None
@@ -100,17 +138,23 @@ def update_task(pid, tid):
         t.order_index = int(data["order_index"] or 0)
     if "due_date" in data:
         v = data["due_date"]
-        t.due_date = date.fromisoformat(v) if v else None
+        if not v:
+            t.due_date = None
+        else:
+            try:
+                t.due_date = date.fromisoformat(v)
+            except Exception:
+                return jsonify({"error": "Invalid due_date, expected YYYY-MM-DD"}), 400
     db.session.commit()
     return jsonify(t.to_dict())
 
+# DELETE
 @bp.route("/projects/<int:pid>/tasks/<int:tid>", methods=["DELETE"])
 @auth_required
 def delete_task(pid, tid):
-    _project_or_404(pid)
-    t = Task.query.get_or_404(tid)
-    if t.project_id != pid:
-        abort(404)
+    t = Task.query.filter_by(project_id=pid, id=tid).first()
+    if not t:
+        return jsonify({"error": "Task not found"}), 404
     db.session.delete(t)
     db.session.commit()
     return jsonify({"ok": True})
@@ -118,7 +162,142 @@ def delete_task(pid, tid):
 @bp.get("/projects/<int:pid>/tasks/progress")
 @auth_required
 def task_progress(pid):
-    total = Task.query.filter_by(project_id=pid).count()
-    done = Task.query.filter_by(project_id=pid, status="done").count()
-    percent = 0 if total == 0 else round(done * 100 / total)
-    return jsonify({"total": total, "done": done, "percent": percent})
+    from datetime import datetime, timezone
+
+    _project_or_404(pid)
+
+    # 1) Load once
+    tasks = Task.query.filter_by(project_id=pid).all()
+    if not tasks:
+        return jsonify({
+            "percent": 0.0,
+            "totals": {"done": 0, "total": 0, "leaves_done": 0, "leaves_total": 0},
+            "by_status": {"todo": 0, "doing": 0, "done": 0},
+            "computed_at": datetime.now(timezone.utc).isoformat()
+        })
+
+    # 2) Indexing
+    by_id = {t.id: t for t in tasks}
+    children = {}
+    for t in tasks:
+        children.setdefault(t.parent_task_id, []).append(t)
+
+    # Roots = tasks whose parent is None OR parent missing (defensive)
+    roots = [t for t in tasks if t.parent_task_id is None or t.parent_task_id not in by_id]
+
+    # Normalize status
+    def norm_status(s: str) -> str:
+        s = (s or "todo").strip().lower()
+        if s in ("doing", "in_progress", "in-progress", "in progress"):
+            return "doing"
+        if s == "done":
+            return "done"
+        return "todo"
+
+    by_status = {"todo": 0, "doing": 0, "done": 0}
+    for t in tasks:
+        by_status[norm_status(t.status)] += 1
+
+    # 3) DFS with memo + cycle guard
+    memo = {}
+    visiting = set()
+
+    def leaf_progress(status: str) -> float:
+        s = norm_status(status)
+        if s == "done":
+            return 1.0
+        if s == "doing":
+            return 0.5
+        return 0.0  # todo/unknown
+
+    def dfs(t: Task) -> float:
+        if t.id in memo:
+            return memo[t.id]
+        if t.id in visiting:  # cycle guard → treat as leaf
+            p = leaf_progress(t.status)
+            memo[t.id] = p
+            return p
+
+        visiting.add(t.id)
+        kids = children.get(t.id, [])
+        if not kids:  # leaf
+            p = leaf_progress(t.status)
+            memo[t.id] = p
+            visiting.remove(t.id)
+            return p
+
+        # parent progress = average of immediate children
+        vals = [dfs(c) for c in kids]
+        p = sum(vals) / len(vals)
+        memo[t.id] = p
+        visiting.remove(t.id)
+        return p
+
+    # 4) Leaves and totals
+    leaves = [t for t in tasks if not children.get(t.id)]
+    leaves_total = len(leaves)
+    leaves_done = sum(1 for t in leaves if norm_status(t.status) == "done")
+
+    # 5) Overall progress
+    if roots:
+        vals = [dfs(r) for r in roots]
+    else:
+        vals = [leaf_progress(t.status) for t in leaves] or [0.0]
+
+    overall = round((sum(vals) / len(vals)) * 100.0, 2)
+
+    return jsonify({
+        "percent": overall,
+        "totals": {
+            "done": by_status["done"],
+            "total": len(tasks),
+            "leaves_done": leaves_done,
+            "leaves_total": leaves_total
+        },
+        "by_status": by_status,
+        "computed_at": datetime.now(timezone.utc).isoformat()
+    })    
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["GET"])
+@auth_required
+def list_task_comments(pid, tid):
+    _project_or_404(pid)
+    t = _task_in_project_or_404(pid, tid)
+    # Use relationship ordering by created_at
+    return jsonify({"comments": [c.to_dict() for c in t.comments]})
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments", methods=["POST"])
+@auth_required
+def create_task_comment(pid, tid):
+    _project_or_404(pid)
+    _task_in_project_or_404(pid, tid)
+
+    data = request.get_json(silent=True) or {}
+    body = (data.get("body") or "").strip()
+    if not body:
+        return jsonify({"error": "body is required"}), 400
+    if len(body) > MAX_COMMENT_LEN:
+        return jsonify({"error": f"body too long (max {MAX_COMMENT_LEN})"}), 400
+
+    c = TaskComment(task_id=tid, user_id=g.user_id, body=body)
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(c.to_dict()), 201
+
+@bp.route("/projects/<int:pid>/tasks/<int:tid>/comments/<int:cid>", methods=["DELETE"])
+@auth_required
+def delete_task_comment(pid, tid, cid):
+    _project_or_404(pid)
+    _task_in_project_or_404(pid, tid)
+
+    c = TaskComment.query.filter_by(id=cid, task_id=tid).first()
+    if not c:
+        return jsonify({"error": "Comment not found"}), 404
+
+    # simple permission: author can delete (extend later for admins)
+    if c.user_id != g.user_id:
+        return jsonify({"error": "Forbidden"}), 403
+
+    db.session.delete(c)
+    db.session.commit()
+    return jsonify({"ok": True})

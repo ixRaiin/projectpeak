@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { api } from '@/lib/api';
+import api from '@/lib/api';
 
 export const useComponents = defineStore('components', {
   state: () => ({ items: [], loading: false, error: '' }),

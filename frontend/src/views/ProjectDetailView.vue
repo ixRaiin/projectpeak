@@ -1,241 +1,383 @@
-<script setup>
-import { ref, computed, onMounted } from 'vue';
-import { useRoute, RouterLink } from 'vue-router';
-import api from '@/lib/api';
-
-import { useProjects } from '@/stores/projects';
-import { useExpenses } from '@/stores/expenses';
-import { useTasks } from '@/stores/tasks';
-import { useCatalog } from '@/stores/catalog';
-
-const route = useRoute();
-const pid = computed(() => Number(route.params.id));
-
-const projects = useProjects();
-const expenses = useExpenses();
-const tasks = useTasks();
-const catalog = useCatalog();
-
-const project = computed(() =>
-  projects.items.find(p => p.id === pid.value) || null
-);
-
-// ---------- summary ----------
-const summary = ref(null);
-const loadingSummary = ref(false);
-const sumErr = ref(null);
-
-// ---------- expenses form ----------
-const form = ref({
-  expense_date: new Date().toISOString().slice(0, 10),
-  vendor: '',
-  memo: '',
-  lines: [{ category_id: null, quantity: 1, unit_price_usd: null, note: '' }],
-});
-function addLine() {
-  form.value.lines.push({ category_id: null, quantity: 1, unit_price_usd: null, note: '' });
-}
-function removeLine(i) { form.value.lines.splice(i, 1); }
-
-const canSubmit = computed(() => {
-  if (!form.value.expense_date) return false;
-  if (!form.value.lines.length) return false;
-  return form.value.lines.every(l =>
-    l.category_id &&
-    Number(l.quantity) > 0 &&
-    (l.unit_price_usd === 0 || Number(l.unit_price_usd) > 0)
-  );
-});
-
-// ---------- tasks quick add / edit ----------
-const newTask = ref({ title: '' });
-const STATUS_OPTS = ['todo', 'doing', 'done'];
-
-async function addRootTask() {
-  const title = newTask.value.title.trim();
-  if (!title) return;
-  await tasks.create(pid.value, { title });
-  newTask.value.title = '';
-  await tasks.fetchProgress(pid.value);
-}
-async function onChangeStatus(t, ev) {
-  await tasks.update(pid.value, t.id, { status: ev.target.value });
-  await tasks.fetchProgress(pid.value);
-}
-async function onBlurTitle(t, ev) {
-  const title = ev.target.value.trim();
-  if (title && title !== t.title) await tasks.update(pid.value, t.id, { title });
-}
-async function onDeleteTask(t) {
-  await tasks.remove(pid.value, t.id);
-  await tasks.fetchProgress(pid.value);
-}
-
-// ---------- utils ----------
-function fmtUSD(v) {
-  if (v == null) return '—';
-  const n = Number(v);
-  if (Number.isNaN(n)) return String(v);
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(n);
-}
-async function loadSummary() {
-  loadingSummary.value = true; sumErr.value = null;
-  try {
-    summary.value = await api.get(`/projects/${pid.value}/summary`);
-  } catch (e) {
-    sumErr.value = e?.message || 'Failed to load summary';
-  } finally {
-    loadingSummary.value = false;
-  }
-}
-async function submitExpense() {
-  if (!canSubmit.value) return;
-  const payload = {
-    expense_date: form.value.expense_date,
-    vendor: form.value.vendor || null,
-    memo: form.value.memo || null,
-    lines: form.value.lines.map(l => ({
-      category_id: l.category_id,
-      quantity: Number(l.quantity),
-      unit_price_usd: Number(l.unit_price_usd),
-      note: l.note || null,
-    })),
-  };
-  await expenses.create(pid.value, payload);
-  await loadSummary();
-  form.value.vendor = '';
-  form.value.memo = '';
-  form.value.lines = [{ category_id: null, quantity: 1, unit_price_usd: null, note: '' }];
-}
-
-onMounted(async () => {
-  // make sure project & catalogs are loaded
-  if (!project.value && projects.fetchOne) await projects.fetchOne(pid.value);
-  if (!catalog.categories.length && catalog.fetchCategories) await catalog.fetchCategories();
-
-  await projects.openDetail?.(pid.value);
-  await expenses.fetchForProject(pid.value);
-  await tasks.fetchForProject(pid.value);
-  await tasks.fetchProgress(pid.value);
-  await loadSummary();
-});
-</script>
-
 <template>
-  <div class="p-6 space-y-6 max-w-5xl mx-auto">
-    <div class="flex items-center justify-between gap-3">
+  <div class="p-6 max-w-6xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="flex items-start justify-between gap-3">
       <div>
-        <h1 class="text-2xl font-semibold">
-          {{ project ? `${project.code} — ${project.name}` : 'Project' }}
-        </h1>
-        <RouterLink class="text-sm underline" to="/projects">← Back to projects</RouterLink>
+        <h1 class="text-2xl font-semibold">{{ project?.name || 'Project' }}</h1>
+        <p class="text-sm text-gray-600">
+          <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-800">
+            {{ project?.status || 'planned' }}
+          </span>
+          <span v-if="project?.code" class="ml-2 text-gray-500">#{{ project.code }}</span>
+        </p>
       </div>
-      <div class="text-sm text-gray-500" v-if="tasks.progress?.percent != null">
-        Progress: {{ Math.round(tasks.progress.percent) }}%
+      <div class="min-w-[200px]">
+        <div class="h-2 bg-gray-100 rounded">
+          <div class="m-3 h-2 rounded bg-black" :style="{ width: (localProgress ?? project?.progress_percent ?? 0) + '%' }"></div>
+        </div>
       </div>
     </div>
 
-    <!-- Tasks -->
-    <section class="space-y-2 border rounded p-4">
-      <h2 class="font-semibold mb-1">Tasks</h2>
-      <form class="flex flex-wrap gap-2 items-center" @submit.prevent="addRootTask">
-        <input v-model="newTask.title" placeholder="Task title" class="border rounded p-2 flex-1" />
-        <button class="rounded bg-black text-white px-3 py-2 cursor-pointer">Add task</button>
+    <!-- Tabs -->
+    <div class="border-b">
+      <nav class="flex gap-6 -mb-px text-sm">
+        <button :class="tabBtn('details')" @click="goTab('details')">Project Details</button>
+        <button :class="tabBtn('expenses')" @click="goTab('expenses')">Expenses</button>
+        <button :class="tabBtn('tasks')" @click="goTab('tasks')">Tasks</button>
+      </nav>
+    </div>
+
+    <!-- Project Details -->
+    <div v-if="activeTab === 'details'" class="space-y-6">
+      <h2 class="text-xl font-semibold">Project Details</h2>
+
+      <form @submit.prevent="saveEdits" class="space-y-4 max-w-3xl">
+        <div class="grid md:grid-cols-2 gap-4">
+          <label class="block">
+            <span class="block text-sm text-gray-600">Name *</span>
+            <input v-model="form.name" class="w-full border rounded p-2" required />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Code</span>
+            <input v-model="form.code" class="w-full border rounded p-2" />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Client</span>
+            <select v-model.number="form.client_id" class="w-full border rounded p-2">
+              <option v-for="c in clients.items" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Status</span>
+            <select v-model="form.status" class="w-full border rounded p-2">
+              <option value="planned">Planned</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Start Date</span>
+            <input type="date" v-model="form.start_date" class="w-full border rounded p-2" />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">End Date</span>
+            <input type="date" v-model="form.end_date" class="w-full border rounded p-2" />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Budget (USD)</span>
+            <input type="number" step="0.01" v-model="form.budget_amount_usd" class="w-full border rounded p-2" />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Tax Rate (e.g., 0.05)</span>
+            <input type="number" step="0.0001" v-model="form.tax_rate" class="w-full border rounded p-2" />
+          </label>
+
+          <label class="block">
+            <span class="block text-sm text-gray-600">Currency</span>
+            <input v-model="form.currency" class="w-full border rounded p-2" />
+          </label>
+        </div>
+
+        <label class="block">
+          <span class="block text-sm text-gray-600">Description</span>
+          <textarea v-model="form.description" rows="3" class="w-full border rounded p-2"></textarea>
+        </label>
+
+        <div class="flex gap-3">
+          <button type="submit" class="px-4 py-2 rounded bg-black text-white" :disabled="saving">
+            {{ saving ? 'Saving…' : 'Save Changes' }}
+          </button>
+          <button type="button" class="px-4 py-2 rounded border" @click="resetForm">Cancel</button>
+        </div>
+        <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
       </form>
-
-      <ul class="divide-y border rounded">
-        <li v-for="t in tasks.items" :key="t.id" class="p-3 flex items-center gap-3">
-          <select class="border rounded p-2" :value="t.status || 'todo'" @change="onChangeStatus(t, $event)">
-            <option v-for="s in STATUS_OPTS" :key="s" :value="s">{{ s }}</option>
-          </select>
-
-          <input class="border rounded p-2 flex-1" :defaultValue="t.title" @blur="onBlurTitle(t, $event)" />
-
-          <button class="text-red-600 text-sm" type="button" @click="onDeleteTask(t)">Delete</button>
-        </li>
-        <li v-if="!tasks.items.length" class="p-3 text-sm text-gray-500">No tasks yet.</li>
-      </ul>
-    </section>
+    </div>
 
     <!-- Expenses -->
-    <section class="space-y-3">
-      <h2 class="font-semibold">Add expense</h2>
-      <form class="border rounded p-4 space-y-3" @submit.prevent="submitExpense">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <label class="block">
-            <span class="text-sm text-gray-600">Date</span>
-            <input v-model="form.expense_date" type="date" class="w-full border rounded p-2" />
-          </label>
-          <input v-model="form.vendor" placeholder="Vendor" class="border rounded p-2" />
-          <input v-model="form.memo" placeholder="Memo" class="border rounded p-2" />
-        </div>
+<div v-else-if="activeTab === 'expenses'" class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h2 class="font-semibold">Expenses</h2>
+    <button class="px-3 py-2 rounded bg-black text-white" @click="openAddExpense">
+      Add Expense
+    </button>
+  </div>
 
-        <div class="space-y-2">
-          <div v-for="(l, i) in form.lines" :key="i" class="grid grid-cols-1 md:grid-cols-5 gap-2 items-center">
-            <select v-model.number="l.category_id" class="border rounded p-2">
-              <option :value="null" disabled>Select category…</option>
-              <option v-for="c in catalog.categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
-            <input v-model.number="l.quantity" type="number" min="0" step="0.0001" placeholder="Qty" class="border rounded p-2" />
-            <input v-model="l.unit_price_usd" type="number" step="0.0001" placeholder="Unit $" class="border rounded p-2" />
-            <input v-model="l.note" placeholder="Note" class="border rounded p-2" />
-            <button class="text-red-600 text-sm" type="button" @click="removeLine(i)">Remove</button>
-          </div>
-          <button class="text-sm underline" type="button" @click="addLine">+ Add line</button>
-        </div>
+  <div v-if="exp.loading.expenses">Loading expenses…</div>
+  <div v-else>
+    <table class="w-full text-sm border rounded overflow-hidden">
+      <thead class="bg-gray-50 text-left">
+        <tr>
+          <th class="px-3 py-2">Date</th>
+          <th class="px-3 py-2">Vendor</th>
+          <th class="px-3 py-2">Reference</th>
+          <th class="px-3 py-2">Note</th>
+          <th class="px-3 py-2 text-right">Unit Price</th>
+          <th class="px-3 py-2 text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="e in expensesForProject" :key="e.id" class="border-t">
+          <td class="px-3 py-2">{{ e.expense_date }}</td>
+          <td class="px-3 py-2">{{ e.vendor || '—' }}</td>
+          <td class="px-3 py-2">{{ e.reference_no || '—' }}</td>
+          <td class="px-3 py-2 text-gray-600">
+            {{ truncateNote(e.memo ?? e.note ?? '—') }}
+          </td>
 
-        <button :disabled="!canSubmit" class="rounded bg-black text-white px-3 py-2 cursor-pointer disabled:opacity-60">
-          Save expense
-        </button>
-      </form>
+          <!-- Show unit price if there's exactly 1 line -->
+          <td class="px-3 py-2 text-right">
+            <span v-if="(e.lines?.length || 0) === 1">
+              {{ formatUsd(e.lines[0].unit_price_usd) }}
+            </span>
+            <span v-else>—</span>
+          </td>
 
-      <div>
-        <h3 class="font-semibold mb-2">Expenses</h3>
-        <ul class="divide-y border rounded">
-          <li v-for="e in expenses.items" :key="e.id" class="p-3">
-            <div class="font-medium">
-              {{ e.expense_date }} — {{ e.vendor || '—' }} · Total: {{ fmtUSD(e.total_usd) }}
-            </div>
-            <ul class="text-sm text-gray-700 pl-4 list-disc">
-              <li v-for="ln in e.lines || []" :key="ln.id">
-                {{ catalog.categories.find(c => c.id === ln.category_id)?.name || ('#'+ln.category_id) }}
-                — {{ ln.quantity }} × {{ fmtUSD(ln.unit_price_usd) }} = {{ fmtUSD(ln.line_total_usd) }}
-              </li>
-            </ul>
-          </li>
-          <li v-if="!expenses.items.length" class="p-3 text-sm text-gray-500">No expenses yet.</li>
-        </ul>
+          <!-- Show subtotal = Σ(qty × unit_price) -->
+          <td class="px-3 py-2 text-right">
+            {{ formatUsd(expenseSubtotal(e)) }}
+          </td>
+        </tr>
+
+        <tr v-if="!expensesForProject.length">
+          <td colspan="6" class="px-3 py-4 text-gray-500">No expenses yet.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+
+
+  <!-- Add Expense Modal -->
+  <div
+    v-if="showAddExpense"
+    class="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4"
+  >
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold">Add Expense</h3>
+        <button class="text-sm underline" @click="closeAddExpense">Close</button>
       </div>
-    </section>
+      <AddExpenseForm
+        :project-id="pid"
+        @success="onExpenseCreated"
+        @cancel="closeAddExpense"
+      />
+    </div>
+  </div>
+</div>
 
-    <!-- Summary -->
-    <section class="space-y-3">
-      <div class="flex items-center justify-between">
-        <h2 class="font-semibold">Summary (planned vs actual)</h2>
-        <button class="text-sm underline" type="button" @click="loadSummary" :disabled="loadingSummary">Refresh</button>
-      </div>
 
-      <div v-if="sumErr" class="text-red-600 text-sm">{{ sumErr }}</div>
-
-      <div v-if="summary">
-        <ul class="divide-y border rounded">
-          <li v-for="r in summary.per_category" :key="r.category_id" class="p-3 flex items-center justify-between">
-            <div class="font-medium">{{ r.category_name || ('#'+r.category_id) }}</div>
-            <div class="text-sm">
-              Planned {{ fmtUSD(r.planned_usd) }}
-              · Actual {{ fmtUSD(r.actual_usd) }}
-              · Var {{ fmtUSD(r.variance_usd) }}
-            </div>
-          </li>
-        </ul>
-        <div class="mt-3 p-3 border rounded bg-gray-50 text-sm">
-          <div>Planned total: {{ fmtUSD(summary.totals?.planned_total_usd) }}</div>
-          <div>Actual total: {{ fmtUSD(summary.totals?.actual_total_usd) }}</div>
-          <div class="font-medium">Variance: {{ fmtUSD(summary.totals?.variance_total_usd) }}</div>
-        </div>
-      </div>
-      <div v-else-if="loadingSummary" class="text-sm text-gray-500">Loading…</div>
-      <div v-else class="text-sm text-gray-500">No summary yet.</div>
-    </section>
+    <!-- Tasks -->
+    <div v-else-if="activeTab === 'tasks'">
+      <ProjectKanban :project-id="pid" @progress="onProgress" />
+    </div>
   </div>
 </template>
+
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import api from '@/lib/api'
+import { useProjects } from '@/stores/projects'
+import { useClients } from '@/stores/clients'
+import { useExpensesStore } from '@/stores/expenses'
+import AddExpenseForm from '@/components/expenses/AddExpenseForm.vue'
+import ProjectKanban from '@/components/tasks/ProjectKanban.vue'
+
+const route = useRoute()
+const router = useRouter()
+const projects = useProjects()
+const clients = useClients()
+const exp = useExpensesStore()
+
+const pid = Number(route.params.id)
+
+// --- Tab state (map 'summary' → 'details' for backward compatibility)
+const normalizeTab = (t) => (t === 'summary' ? 'details' : (t || 'details'))
+const activeTab = ref(normalizeTab(route.query.tab))
+watch(() => route.query.tab, (t) => { activeTab.value = normalizeTab(t) })
+function goTab(tab) { router.replace({ query: { ...route.query, tab } }) }
+function tabBtn(tab) {
+  return [
+    'px-1 pb-2 border-b-2 -mb-px',
+    activeTab.value === tab ? 'border-black text-black' : 'border-transparent text-gray-500 hover:text-black'
+  ].join(' ')
+}
+
+// --- Project lookup
+const project = computed(() => projects.items.find(p => p.id === pid) || null)
+
+// --- Details form
+const form = ref({
+  name: '',
+  code: '',
+  client_id: null,
+  status: 'planned',
+  start_date: '',
+  end_date: '',
+  budget_amount_usd: '',
+  tax_rate: '',
+  currency: 'USD',
+  description: '',
+})
+const error = ref(null)
+const saving = ref(false)
+
+function hydrateForm() {
+  if (!project.value) return
+  const p = project.value
+  form.value = {
+    name: p.name || '',
+    code: p.code || '',
+    client_id: p.client_id ?? null,
+    status: p.status || 'planned',
+    start_date: p.start_date || '',
+    end_date: p.end_date || '',
+    budget_amount_usd: p.budget_amount_usd ?? '',
+    tax_rate: p.tax_rate ?? '',
+    currency: p.currency || 'USD',
+    description: p.description || '',
+  }
+}
+function resetForm() { hydrateForm() }
+
+// Safe numeric parser: handles '', null, '$1,234.50'
+function toNumber(v) {
+  if (v == null) return 0
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+  if (typeof v === 'string') {
+    const n = Number(v.replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(n) ? n : 0
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatUsd(v) {
+  const n = toNumber(v)
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—'
+}
+
+function lineQty(ln) {
+  return toNumber(ln?.quantity ?? ln?.qty ?? 1)
+}
+
+function lineUnit(ln) {
+  const up = ln?.unit_price_usd ?? ln?.unit_price ?? ln?.price_usd ?? ln?.price ?? 0
+  return toNumber(up)
+}
+
+function lineTotal(ln) {
+  const pre = toNumber(ln?.line_total_usd ?? ln?.total_usd ?? ln?.total)
+  if (pre > 0) return pre
+  return lineQty(ln) * lineUnit(ln)
+}
+
+function expenseSubtotal(expense) {
+  const lines = Array.isArray(expense?.lines) ? expense.lines : []
+  return lines.reduce((sum, l) => sum + lineTotal(l), 0)
+}
+
+function truncateNote(note) {
+  if (!note) return '—'
+  const words = String(note).trim().split(/\s+/)
+  return words.length > 100 ? words.slice(0, 100).join(' ') + '…' : note
+}
+
+async function saveEdits() {
+  error.value = null
+  saving.value = true
+  try {
+    const payload = { ...form.value }
+    if (payload.budget_amount_usd === '' || payload.budget_amount_usd === null) delete payload.budget_amount_usd
+    else payload.budget_amount_usd = Number(payload.budget_amount_usd)
+    if (payload.tax_rate === '' || payload.tax_rate === null) delete payload.tax_rate
+    else payload.tax_rate = Number(payload.tax_rate)
+    const updated = await api.patch(`/projects/${pid}`, payload)
+    const idx = projects.items.findIndex(p => p.id === pid)
+    if (idx !== -1) projects.items[idx] = { ...projects.items[idx], ...updated }
+    hydrateForm()
+  } catch (e) {
+    error.value = e?.message || 'Failed to update project'
+  } finally {
+    saving.value = false
+  }
+}
+
+// --- Expenses
+const expensesForProject = computed(() => exp.byProject[pid] || [])
+const showAddExpense = ref(false)
+function openAddExpense() { showAddExpense.value = true }
+function closeAddExpense() {
+  showAddExpense.value = false
+  if (route.query.open) router.replace({ query: { ...route.query, open: undefined } })
+}
+async function onExpenseCreated() {
+  await exp.fetchExpenses(pid)
+  closeAddExpense()
+}
+
+// --- Progress sync from Kanban (robust to different shapes)
+const localProgress = ref(null)
+
+async function onProgress(progressObj) {
+  if (!progressObj || typeof progressObj !== 'object') return
+
+  const percent = Number(progressObj.percent ?? 0)
+
+  // accept either .counts or .totals
+  const counts = progressObj.counts || progressObj.totals
+  const total = Number(counts?.total ?? counts?.leaves_total ?? 0)
+  const done = Number(counts?.done ?? counts?.leaves_done ?? 0)
+
+  // desired status
+  let desired = progressObj.suggestion
+  if (!desired) {
+    // compute a safe fallback
+    const anyDoing = Number(progressObj.by_status?.doing ?? 0) > 0
+    desired = total === 0 ? 'planned'
+            : (done === total ? 'completed' : (anyDoing || done > 0 ? 'active' : 'planned'))
+  }
+
+  localProgress.value = percent
+
+  const patch = {}
+  if (project.value && project.value.progress_percent !== percent) patch.progress_percent = percent
+  if (project.value && desired && project.value.status !== desired) patch.status = desired
+  if (Object.keys(patch).length) {
+    try {
+      const updated = await api.patch(`/projects/${pid}`, patch)
+      const idx = projects.items.findIndex(p => p.id === pid)
+      if (idx !== -1) projects.items[idx] = { ...projects.items[idx], ...updated }
+    } catch { /* non-fatal */ }
+  }
+  if (desired === 'completed' && project.value?.status !== 'completed' && total > 0 && done === total) {
+    if (confirm('All tasks are complete. Mark the project as Completed?')) {
+      try {
+        const updated = await api.patch(`/projects/${pid}`, { status: 'completed', progress_percent: 100 })
+        const idx = projects.items.findIndex(p => p.id === pid)
+        if (idx !== -1) projects.items[idx] = { ...projects.items[idx], ...updated }
+      } catch {/* non-fatal */ }
+    }
+  }
+}
+
+// --- Boot
+onMounted(async () => {
+  if (!clients.items.length) { try { await clients.fetchAll() } catch {/* */} }
+  if (!project.value) { try { await projects.fetchOne(pid) } catch {/* */} }
+  hydrateForm()
+  await exp.fetchExpenses(pid)
+  // Back-compat: auto-open Add Expense modal if asked
+  if (normalizeTab(route.query.tab) === 'expenses' && route.query.open === 'add') {
+    showAddExpense.value = true
+  }
+})
+</script>

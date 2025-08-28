@@ -1,12 +1,13 @@
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuth()
 
-const email = ref('admin@example.com')
+const email = ref('')
 const password = ref('')
 const submitting = ref(false)
 
@@ -14,14 +15,16 @@ async function submit() {
   submitting.value = true
   try {
     await auth.login(email.value, password.value)
-    router.push('/') // go home (or wherever)
+    const to = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    router.replace(to)
   } catch (e) {
-    // auth.error already set in store
+    // auth.error is set in store
   } finally {
     submitting.value = false
   }
 }
 </script>
+
 
 <template>
   <div class="max-w-sm mx-auto p-6 space-y-4">
